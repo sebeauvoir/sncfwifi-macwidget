@@ -49,8 +49,10 @@ def build_stops(state):
             progress_pct = 100.0
             stop_minutes = -5
         elif idx == current_idx:
+            # stop[i].progress décrit le segment PARTANT de i : à l'arrêt en gare, il n'a
+            # pas commencé (0 %), sinon il est entamé. C'est ce que lit SNCFDataSource.
             if state.get("stationStatus") == "station":
-                progress_pct = 100.0
+                progress_pct = 0.0
                 stop_minutes = 0
             else:
                 progress_pct = 35.0
@@ -83,15 +85,28 @@ def build_stops(state):
     return out
 
 
+def current_position(state, stops):
+    """Position GPS cohérente avec l'état : sur la gare à l'arrêt, entre deux gares sinon.
+    Sans ça, la détection « en gare » du widget (distance GPS < 1500 m) reste muette."""
+    idx = max(0, min(int(state.get("currentStationIndex", 1)), len(stops) - 1))
+    here = stops[idx]["coordinates"]
+    if state.get("stationStatus") == "station":
+        return here["latitude"], here["longitude"]
+    nxt = stops[min(idx + 1, len(stops) - 1)]["coordinates"]
+    return (here["latitude"] + nxt["latitude"]) / 2, (here["longitude"] + nxt["longitude"]) / 2
+
+
 def current_payloads():
     with STATE_LOCK:
         state = dict(STATE)
         stops = build_stops(state)
 
+    latitude, longitude = current_position(state, stops)
     gps = {
-        "speed": int(state.get("speed", 0)) if state.get("stationStatus") != "station" else 0,
-        "latitude": 47.0,
-        "longitude": 3.0,
+        # L'API réelle renvoie des m/s ; le panneau démo saisit des km/h.
+        "speed": round(int(state.get("speed", 0)) / 3.6, 2) if state.get("stationStatus") != "station" else 0,
+        "latitude": latitude,
+        "longitude": longitude,
     }
     progress = {
         "trainId": str(state.get("trainId", "9812")),
@@ -262,7 +277,8 @@ class Handler(BaseHTTPRequestHandler):
 
         with STATE_LOCK:
             for key in (
-                "trainId", "speed", "wifiQuality", "devices", "consumedData", "remainingData", "nextResetMinutes", "barAttendance", "barQueueEmpty",
+                "trainId", "trainNumber", "speed", "wifiQuality", "devices", "consumedData", "remainingData",
+                "nextResetMinutes", "barAttendance", "barQueueEmpty", "delayMins", "delayCause",
                 "stationStatus", "currentStationIndex", "minutesToNextStop", "minutesToFinalStop"
             ):
                 if key in payload:
