@@ -3,42 +3,65 @@ import Combine
 
 /// Modèle de vue exposé au panneau SwiftUI. Purement des données, aucune logique AppKit.
 
-/// État d'un arrêt dans la desserte du train.
 enum StopStatus {
-    case passed    // Arrêt déjà desservi
-    case current   // Prochain arrêt / arrêt en cours
-    case upcoming  // Arrêt à venir
+    case passed
+    case current
+    case upcoming
 }
 
-/// Un arrêt affiché dans la timeline.
 struct StopRow: Identifiable {
     let id: String
     let label: String
     /// Heure théorique "HH:mm" (affichée barrée si retard).
     let theoricTime: String
-    /// Heure réelle "HH:mm".
     let realTime: String
+    /// Heure d'arrivée réelle, pour les notifications avant arrivée.
+    let arrivalDate: Date?
     let delayMin: Int
     let status: StopStatus
 }
 
-/// Une gare proposée dans le sélecteur "Gare d'arrivée".
 struct ArrivalOption: Identifiable {
     let id: String
     let label: String
 }
 
+/// Métrique libre affichée par le panneau. Permet à un réseau d'exposer ses spécificités
+/// sans toucher aux vues.
+struct MetricRow: Identifiable {
+    /// `.half` = deux métriques sur la même ligne (altitude + cap).
+    enum Span {
+        case full
+        case half
+    }
+
+    let id: String
+    let symbol: String
+    let text: String
+    var span: Span = .full
+    var isFootnote: Bool = false
+
+    /// Petite ligne grise de bas de bloc (limites de l'API, qualité du point GPS…).
+    static func footnote(_ text: String) -> MetricRow {
+        MetricRow(id: "footnote", symbol: "", text: text, isFootnote: true)
+    }
+}
+
 /// Instantané de tout ce que le panneau affiche pour un train connecté.
 struct TrainViewState {
-    var trainNumber: String?
-    var destination: String?
-    var delayMin: Int
-    var delayCause: String
+    let provider: TrainProviderDescriptor
 
-    var stops: [StopRow]
-    var globalProgress: Double
+    /// Libellés composés par la source, pour que les vues n'aient rien à savoir du réseau.
+    var headerTitle: String
+    var headerSubtitle: String?
 
-    var speedKmh: Int
+    var delayMin: Int = 0
+    var delayCause: String = ""
+
+    var stops: [StopRow] = []
+    var globalProgress: Double = 0
+
+    var speedKmh: Int = 0
 
     var wifiQuality: Int?      // 0…5
     var wifiDevices: Int?
@@ -50,11 +73,12 @@ struct TrainViewState {
     var dataRatio: Double?     // 0…1
     var dataResetTime: String? // "HH:mm"
 
-    var arrivalOptions: [ArrivalOption]
+    var metrics: [MetricRow] = []
+
+    var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
 }
 
-/// État global du panneau.
 enum PanelState {
     case loading
     case notConnected(demoMode: Bool)
@@ -62,16 +86,14 @@ enum PanelState {
 }
 
 /// Source d'observation pour la vue SwiftUI. Le `MenuBarController` pousse l'état
-/// et branche les closures d'action (elles appellent les `@objc` existants).
+/// et branche les closures d'action.
 final class TrainStore: ObservableObject {
     @Published var state: PanelState = .loading
 
-    /// Date de la dernière actualisation réussie (pour l'indicateur discret du panneau).
     @Published var lastRefreshDate: Date?
-    /// Intervalle entre deux actualisations automatiques (doit refléter le Timer du contrôleur).
+    /// Doit refléter le Timer du contrôleur.
     let refreshInterval: TimeInterval = 30
 
-    // Actions branchées par le contrôleur AppKit.
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}
     var onSelectArrival: (String) -> Void = { _ in }

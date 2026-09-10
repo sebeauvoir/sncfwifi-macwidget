@@ -12,6 +12,16 @@ final class TrainAPIClient {
     
     private let timeout: TimeInterval = 5
 
+    /// Sonde légère : un seul appel, pour savoir si on est sur le réseau d'un train SNCF.
+    /// Utilisée quand le SSID est illisible et qu'il faut choisir entre les fournisseurs.
+    func probe(completion: @escaping (Bool) -> Void) {
+        if MockTrainData.shared.isEnabled {
+            completion(true)
+            return
+        }
+        fetch(url: gpsURL) { completion($0 != nil) }
+    }
+
     /// Récupère toutes les infos en parallèle, notifie sur le main thread.
     func fetchAll(completion: @escaping (
         _ gps: [String: Any]?,

@@ -9,30 +9,28 @@ final class MenuBarController: NSObject {
     // MARK: - Properties
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let apiClient  = TrainAPIClient()
     private var timer: Timer?
     private var clockTimer: Timer?
     private var lastRawData: [String: Any]?
 
-    // Panneau flottant SwiftUI (remplace l'ancien NSMenu).
     private let store = TrainStore()
     private let popover = NSPopover()
+    private lazy var panelHost = NSHostingController(rootView: AnyView(TrainPanelView().environmentObject(store)))
 
-    // Cache pour le redraw de l'icône sans appel API
-    private var cachedArrivalDate: Date?
-    private var cachedDestShort: String = ""
-    private var cachedGlobalProgress: Double = 0.0
-    private var cachedSpeed: Int = 0
-    private var cachedIsStopped: Bool = false
-    private var cachedStoppedStation: String = ""
-    private var cachedDelayMins: Int = 0
-    private var cachedDelayCause: String = ""
-    private static let resetTimeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        formatter.timeZone = .autoupdatingCurrent
-        return formatter
-    }()
+    /// Pastille courante : le `clockTimer` la redessine toutes les 10 s sans rappeler l'API.
+    /// `nil` = pas de train : sans ça, le redraw périodique réafficherait le train précédent
+    /// par-dessus l'icône « réseau inconnu ».
+    private var badge: StatusBadge?
+
+    /// Fournisseur retenu au dernier cycle réussi. Sert quand le SSID est illisible
+    /// (autorisation Localisation refusée) : évite de re-sonder tous les réseaux à chaque fois.
+    private var detectedProvider: TrainDataSource?
+    private var providerBySSID: [String: TrainDataSource] = [:]
+    /// SSID sondés sans succès, horodatés. Un délai plutôt qu'une liste noire définitive, car
+    /// le portail d'un train peut n'être joignable qu'au bout de quelques minutes à bord.
+    private var nonTrainSSIDs: [String: Date] = [:]
+    private let nonTrainProbeCooldown: TimeInterval = 300
+
     private let locationManager = CLLocationManager()
     private let notificationCenter = UNUserNotificationCenter.current()
 
@@ -51,26 +49,25 @@ final class MenuBarController: NSObject {
 
     override init() {
         super.init()
-        
-        // Demande la permission de localisation pour lire le SSID (macOS 14.4+)
+
+        // Autorisation de localisation : nécessaire pour lire le SSID (macOS 14.4+).
         locationManager.delegate = self
         requestSSIDAuthorizationIfNeeded()
 
-        // Prépare les réglages de notifications locales (avant arrivée en gare).
         registerNotificationDefaults()
         notificationCenter.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        
+
         statusItem.button?.image = NSImage(systemSymbolName: "tram.fill", accessibilityDescription: "Train")
         statusItem.button?.imagePosition = .imageLeft
 
-        // Le clic sur l'icône ouvre/ferme le panneau flottant (et non un NSMenu).
+        // Le clic ouvre le panneau flottant : ne jamais réassigner statusItem.menu.
         statusItem.button?.action = #selector(togglePopover)
         statusItem.button?.target = self
 
         configurePopover()
 
         NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSNotification.Name("DemoDataDidUpdate"), object: nil)
-        
+
         if MockTrainData.shared.isEnabled {
             MockTrainData.shared.start()
         }
@@ -89,10 +86,14 @@ final class MenuBarController: NSObject {
     private func configurePopover() {
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(rootView: TrainPanelView().environmentObject(store))
+        popover.contentViewController = panelHost
 
-        // Branche les actions du panneau sur les handlers existants.
-        store.onRefresh = { [weak self] in self?.refresh() }
+        store.onRefresh = { [weak self] in
+            // Une actualisation manuelle court-circuite le délai de re-sonde : c'est le geste
+            // de l'utilisateur qui vient de monter dans le train.
+            self?.nonTrainSSIDs.removeAll()
+            self?.refresh()
+        }
         store.onQuit = { NSApp.terminate(nil) }
         store.onSelectArrival = { [weak self] stopId in
             UserDefaults.standard.set(stopId, forKey: "arrivalStationId")
@@ -113,18 +114,36 @@ final class MenuBarController: NSObject {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            sizePopoverToContent()
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
     }
 
+    /// `NSPopover` ne suit pas la taille intrinsèque de sa vue SwiftUI : sans ça, il garde la
+    /// hauteur de son premier affichage et rogne le bas du contenu.
+    private func sizePopoverToContent() {
+        panelHost.view.layoutSubtreeIfNeeded()
+        let fitting = panelHost.view.fittingSize
+        guard fitting.width > 0, fitting.height > 0 else { return }
+        popover.contentSize = fitting
+    }
+
+    private func publish(_ state: PanelState) {
+        store.lastRefreshDate = Date()
+        store.state = state
+        guard popover.isShown else { return }
+        DispatchQueue.main.async { [weak self] in self?.sizePopoverToContent() }
+    }
+
+    // MARK: - Pastille
+
     @objc private func redrawTitle() {
-        if cachedDelayMins > 0 {
-            // Affiche le retard pendant 5s, puis repasse au texte normal
-            var t = "⚠ +\(cachedDelayMins)min"
-            if !cachedDelayCause.isEmpty { t += " · \(cachedDelayCause)" }
-            applyTitleImage(text: t)
+        guard let badge else { return }
+        if let delayTitle = badge.delayTitle {
+            // Le retard s'affiche 5 s, puis on repasse au texte normal.
+            applyTitleImage(text: delayTitle, progress: badge.progress)
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 self?.redrawNormalTitle()
             }
@@ -134,479 +153,286 @@ final class MenuBarController: NSObject {
     }
 
     private func redrawNormalTitle() {
-        let text: String
-        if cachedIsStopped && !cachedStoppedStation.isEmpty {
-            text = "En gare de \(cachedStoppedStation)"
-        } else {
-            var t = cachedDestShort
-            if let arrival = cachedArrivalDate, arrival > Date() {
-                let diffMins = Int(arrival.timeIntervalSinceNow / 60)
-                let timeStr: String
-                if diffMins >= 60 {
-                    let h = diffMins / 60
-                    let m = diffMins % 60
-                    timeStr = m > 0 ? "\(h)h\(String(format: "%02d", m))" : "\(h)h"
-                } else {
-                    timeStr = "\(diffMins)min"
-                }
-                t = t.isEmpty ? timeStr : "\(t) · \(timeStr)"
-            }
-            text = t
-        }
-        applyTitleImage(text: text)
+        guard let badge else { return }
+        applyTitleImage(text: badge.title(), progress: badge.progress)
     }
 
-    private func applyTitleImage(text: String) {
+    private func applyTitleImage(text: String, progress: Double?) {
         guard !text.isEmpty,
-              let img = StatusBarImageGenerator.draw(text: text, progress: cachedGlobalProgress)
+              let image = StatusBarImageGenerator.draw(text: text, progress: progress)
         else { return }
         statusItem.button?.title = ""
-        statusItem.button?.image = img
+        statusItem.button?.image = image
         statusItem.button?.imagePosition = .imageOnly
+    }
+
+    // MARK: - Détection du réseau
+
+    @objc func refresh() {
+        // Le mode démo rejoue l'API SNCF, quel que soit le réseau courant.
+        if MockTrainData.shared.isEnabled {
+            if let demo = TrainProviders.demoSource { fetchAndPublish(from: demo) }
+            return
+        }
+
+        let ssid = CWWiFiClient.shared().interface()?.ssid() ?? ""
+        if !ssid.isEmpty {
+            if let source = TrainProviders.source(forSSID: ssid) ?? providerBySSID[ssid] {
+                detectedProvider = source
+                fetchAndPublish(from: source)
+                return
+            }
+            // SSID sondé sans succès récemment : aucun appel réseau, on épargne la batterie.
+            if let probedAt = nonTrainSSIDs[ssid],
+               Date().timeIntervalSince(probedAt) < nonTrainProbeCooldown {
+                detectedProvider = nil
+                showNotConnected()
+                return
+            }
+            probeProviders { [weak self] source in
+                guard let self else { return }
+                guard let source else {
+                    self.nonTrainSSIDs[ssid] = Date()
+                    self.detectedProvider = nil
+                    self.showNotConnected()
+                    return
+                }
+                self.providerBySSID[ssid] = source
+                self.detectedProvider = source
+                self.fetchAndPublish(from: source)
+            }
+            return
+        }
+
+        // SSID illisible (Localisation refusée, vieux macOS, réseau masqué).
+        if let source = detectedProvider {
+            fetchAndPublish(from: source)
+            return
+        }
+        probeProviders { [weak self] source in
+            guard let self else { return }
+            guard let source else {
+                self.showNotConnected()
+                return
+            }
+            self.detectedProvider = source
+            self.fetchAndPublish(from: source)
+        }
+    }
+
+    /// Sonde tous les réseaux en parallèle. Aucun n'est privilégié : l'ordre de
+    /// `TrainProviders.all` ne sert qu'à départager si plusieurs répondent.
+    private func probeProviders(completion: @escaping (TrainDataSource?) -> Void) {
+        let sources = TrainProviders.all
+        let group = DispatchGroup()
+        let syncQueue = DispatchQueue(label: "fr.sncf.wifi-widget.probe")
+        var onboardIds: Set<String> = []
+
+        for source in sources {
+            group.enter()
+            source.probeOnboard { onboard in
+                if onboard {
+                    syncQueue.sync { _ = onboardIds.insert(source.descriptor.id) }
+                }
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) {
+            completion(sources.first { onboardIds.contains($0.descriptor.id) })
+        }
+    }
+
+    /// Oublie le fournisseur détecté après un échec d'API, pour re-sonder au prochain cycle.
+    private func forgetDetectedProvider() {
+        detectedProvider = nil
+        providerBySSID.removeAll()
+    }
+
+    private func showNotConnected() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.badge = nil
+            self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
+            self.statusItem.button?.imagePosition = .imageLeft
+            self.statusItem.button?.title = ""
+            self.publish(.notConnected(demoMode: MockTrainData.shared.isEnabled))
+        }
     }
 
     // MARK: - Refresh
 
-    @objc func refresh() {
-        if !MockTrainData.shared.isEnabled {
-            let ssid = CWWiFiClient.shared().interface()?.ssid() ?? ""
-            
-            // Liste stricte des réseaux Wi-Fi SNCF / TGV
-            let knownSNCFNetworks = [
-                "_SNCF_WIFI_INOUI",
-                "OUIFI",
-                "SNCF_WIFI_INTERCITES",
-                "WIFI_SNCF",
-                "_WIFI_LYRIA"
-            ]
-            
-            // On vérifie le nom du réseau s'il n'est pas vide (cas avec droits de localisation ou vieux macOS).
-            if !ssid.isEmpty && !knownSNCFNetworks.contains(ssid) {
-                // Pas sur le wifi du train : on arrête ici pour économiser la batterie
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
-                    self.statusItem.button?.title = ""
-                    self.store.lastRefreshDate = Date()
-                    self.store.state = .notConnected(demoMode: MockTrainData.shared.isEnabled)
-                }
-                return
-            }
-        }
-
-        apiClient.fetchAll { [weak self] gps, details, bar, stats, status in
+    private func fetchAndPublish(from source: TrainDataSource) {
+        source.fetch { [weak self] snapshot in
             guard let self else { return }
 
-            // Conserver un snapshot debug même si l'API est indisponible.
-            var snapshot: [String: Any] = [:]
-            let ssidInfo = self.currentSSIDInfo()
-            snapshot["ssid"] = ssidInfo.ssid
-            snapshot["ssidStatus"] = ssidInfo.status
-            snapshot["demoMode"] = MockTrainData.shared.isEnabled
-            snapshot["demoServerURL"] = MockTrainData.shared.baseURLString
-            if let g = gps { snapshot["gps"] = g }
-            if let d = details { snapshot["details"] = d }
-            if let b = bar { snapshot["bar"] = b }
-            if let s = stats { snapshot["stats"] = s }
-            if let st = status { snapshot["status"] = st }
-            self.lastRawData = snapshot
-
-            if gps == nil && details == nil {
-                self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
-                self.statusItem.button?.title = ""
-                self.store.lastRefreshDate = Date()
-                self.store.state = .notConnected(demoMode: MockTrainData.shared.isEnabled)
-            } else {
-                let (title, customImage, viewState) = self.buildTrainState(gps: gps, details: details, bar: bar, stats: stats, status: status)
-                if let img = customImage {
-                    self.statusItem.button?.title = ""
-                    self.statusItem.button?.image = img
-                    self.statusItem.button?.imagePosition = .imageOnly
-                } else {
-                    self.statusItem.button?.image = NSImage(systemSymbolName: "tram.fill", accessibilityDescription: nil)
-                    self.statusItem.button?.imagePosition = .imageLeft
-                    self.statusItem.button?.title = title.isEmpty ? "" : " \(title)"
-                }
-                self.store.lastRefreshDate = Date()
-                self.store.state = .connected(viewState)
-                // Applique le texte delay-aware (rotation) après avoir peuplé le cache
-                if self.cachedArrivalDate != nil || self.cachedIsStopped {
-                    self.redrawTitle()
-                }
+            guard let snapshot else {
+                self.lastRawData = self.debugSnapshot(provider: source.descriptor, payloads: [:])
+                self.forgetDetectedProvider()
+                self.showNotConnected()
+                return
             }
+
+            self.lastRawData = self.debugSnapshot(provider: source.descriptor, payloads: snapshot.rawPayloads)
+            if let notification = self.notifyBeforeArrivalIfNeeded(snapshot: snapshot) {
+                self.lastRawData?["notification"] = notification
+            }
+
+            self.badge = snapshot.badge
+            self.redrawTitle()
+            self.publish(.connected(snapshot.viewState))
         }
     }
 
-    // MARK: - Construction de l'état du train (modèle de vue)
-
-    private func buildTrainState(gps: [String: Any]?,
-                                 details: [String: Any]?,
-                                 bar: [String: Any]?,
-                                 stats: [String: Any]?,
-                                 status: [String: Any]?) -> (String, NSImage?, TrainViewState) {
-
-        // L'API retourne la vitesse en m/s, on convertit en km/h
-        let speedRaw = asDouble(gps?["speed"]) ?? 0.0
-        let speed = Int(speedRaw * 3.6)
-
-        var trainNumber:       String?
-        var destinationLabel:  String?
-        var nextStopLabel:     String?
-        var nextStopIndex:     Int = 0
-        var isStoppedAtStation: Bool = false
-        var allStops:          [[String: Any]] = []
-        var trainDelayMins:    Int = 0
-        var trainDelayCause:   String = ""
-
-        let currentLat = asDouble(gps?["latitude"]) ?? asDouble(gps?["lat"])
-        let currentLon = asDouble(gps?["longitude"]) ?? asDouble(gps?["lon"]) ?? asDouble(gps?["lng"])
-
-        let distanceToStop: ([String: Any]) -> Double = { stop in
-            guard let lat = currentLat, let lon = currentLon,
-                  let coords = stop["coordinates"] as? [String: Any],
-                  let sLat = self.asDouble(coords["latitude"]),
-                  let sLon = self.asDouble(coords["longitude"]) else {
-                return 999999.0
-            }
-            return CLLocation(latitude: lat, longitude: lon).distance(from: CLLocation(latitude: sLat, longitude: sLon))
-        }
-
-        if let det = details {
-            // "number" = numéro commercial du train (ex: 6201), "trainId" = numéro de rame matériel
-            if let s = det["number"] as? String, !s.isEmpty {
-                trainNumber = s
-            } else if let n = det["number"] as? Int {
-                trainNumber = String(n)
-            } else if let n = det["number"] as? Double {
-                trainNumber = String(Int(n))
-            }
-
-            allStops = (det["stops"] as? [[String: Any]]) ?? []
-            destinationLabel = allStops.last?["label"]  as? String
-
-            // Retard global du train — la valeur est sur chaque arrêt, pas à la racine
-            trainDelayMins = safeInt(det["delay"])
-            if trainDelayMins == 0 { trainDelayMins = safeInt(allStops.last?["delay"]) }
-
-            // Raison du retard : d'abord dans events[], puis sur les arrêts
-            if let events = det["events"] as? [[String: Any]] {
-                trainDelayCause = events.first(where: { ($0["type"] as? String) == "RETARD" })
-                    .flatMap { $0["text"] as? String } ?? ""
-            }
-            if trainDelayCause.isEmpty {
-                trainDelayCause = (det["delayReason"] as? String)
-                    ?? allStops.first(where: { ($0["delayReason"] as? String)?.isEmpty == false })
-                        .flatMap { $0["delayReason"] as? String }
-                    ?? ""
-            }
-
-            // Trouver le segment en cours (le premier qui n'est pas à 100%)
-            var currentSegmentIndex = 0
-            for (i, stop) in allStops.enumerated() {
-                let progressDict = stop["progress"] as? [String: Any]
-                let pct = (progressDict?["progressPercentage"] as? Double) ?? 0.0
-                if pct < 100.0 {
-                    currentSegmentIndex = i
-                    break
-                }
-                currentSegmentIndex = i
-            }
-            
-            let depIndex = currentSegmentIndex
-            let arrIndex = min(depIndex + 1, max(0, allStops.count - 1))
-            
-            let distToDep = allStops.indices.contains(depIndex) ? distanceToStop(allStops[depIndex]) : 999999.0
-            let distToArr = allStops.indices.contains(arrIndex) ? distanceToStop(allStops[arrIndex]) : 999999.0
-            
-            // Logique de positionnement
-            var isStopped = false
-            var stoppedAt = arrIndex
-            
-            if speed < 36 {
-                if distToDep < 1500 {
-                    isStopped = true
-                    stoppedAt = depIndex
-                } else if distToArr < 1500 {
-                    isStopped = true
-                    stoppedAt = arrIndex
-                } else if currentLat == nil {
-                    // Fallback si pas de GPS coord : utilisation de l'API
-                    let depStop = allStops[depIndex]
-                    let pDict = depStop["progress"] as? [String: Any]
-                    let pct = (pDict?["progressPercentage"] as? Double) ?? 0.0
-                    let remDistAPI = (pDict?["remainingDistance"] as? Double) ?? 999999.0
-                    let travDistAPI = (pDict?["traveledDistance"] as? Double) ?? 999999.0
-                    
-                    if pct < 2.0 || travDistAPI < 1500 {
-                        isStopped = true
-                        stoppedAt = depIndex
-                    } else if pct > 98.0 || remDistAPI < 1500 {
-                        isStopped = true
-                        stoppedAt = arrIndex
-                    }
-                }
-            }
-            
-            isStoppedAtStation = isStopped
-            // En mouvement, la "prochaine gare" est la gare d'arrivée du segment (arrIndex)
-            nextStopIndex = isStopped ? stoppedAt : arrIndex
-
-            if !allStops.isEmpty && allStops.indices.contains(nextStopIndex) {
-                nextStopLabel = allStops[nextStopIndex]["label"] as? String
-            }
-        }
-
-        // ── Titre icône de la barre des tâches ────────────────────────
-        var barTitle = ""
-        var customImage: NSImage? = nil
-        var notificationDebug: [String: Any]?
-
-        if !allStops.isEmpty {
-            // Déterminer la gare d'arrivée cible
-            var arrivalStationIndex = allStops.count - 1
-            if let savedId = UserDefaults.standard.string(forKey: "arrivalStationId"),
-               let idx = allStops.firstIndex(where: { ($0["id"] as? String) == savedId || ($0["label"] as? String) == savedId }) {
-                if idx >= nextStopIndex {
-                    arrivalStationIndex = idx
-                }
-            }
-            let arrivalStop = allStops[arrivalStationIndex]
-            let destLabel = arrivalStop["label"] as? String ?? ""
-            
-            // Calcul du temps estimé restant
-            var timeRemainingStr = ""
-            let dateStr = arrivalStop["realDate"] as? String ?? arrivalStop["theoricDate"] as? String
-            if let targetDate = parseDate(dateStr), targetDate > Date() {
-                let diffMins = Int(targetDate.timeIntervalSinceNow / 60)
-                if diffMins >= 60 {
-                    let h = diffMins / 60
-                    let m = diffMins % 60
-                    timeRemainingStr = m > 0 ? " \(h)h\(String(format: "%02d", m))" : " \(h)h"
-                } else if diffMins > 0 {
-                    timeRemainingStr = " \(diffMins)min"
-                }
-            }
-
-            if let notificationTargetStop = notificationTargetStop(allStops: allStops,
-                                                                   nextStopIndex: nextStopIndex,
-                                                                   isStoppedAtStation: isStoppedAtStation,
-                                                                   arrivalStationIndex: arrivalStationIndex) {
-                let notifyLabel = notificationTargetStop["label"] as? String ?? "votre gare"
-                let notifyId = (notificationTargetStop["id"] as? String) ?? notifyLabel
-                let notifyDateStr = notificationTargetStop["realDate"] as? String ?? notificationTargetStop["theoricDate"] as? String
-                if let notifyDate = parseDate(notifyDateStr) {
-                    let notifyMins = Int(notifyDate.timeIntervalSinceNow / 60)
-                    notificationDebug = [
-                        "enabled": isBeforeArrivalNotificationEnabled,
-                        "target": arrivalNotificationTarget.rawValue,
-                        "targetStopId": notifyId,
-                        "targetStopLabel": notifyLabel,
-                        "minutesRemaining": notifyMins,
-                        "leadTime": beforeArrivalNotificationLeadTime,
-                        "isStoppedAtStation": isStoppedAtStation
-                    ]
-                    maybeNotifyBeforeArrival(
-                        stopId: notifyId,
-                        stopLabel: notifyLabel,
-                        minutesRemaining: notifyMins,
-                        isStoppedAtStation: isStoppedAtStation
-                    )
-                }
-            }
-            
-            // Calcul de la progression basé sur le temps (départ → maintenant → arrivée cible)
-            var globalProgress: Double = 0.0
-            let firstStop = allStops[0]
-            let firstDateStr = firstStop["realDate"] as? String ?? firstStop["theoricDate"] as? String
-            let arrDateStr = arrivalStop["realDate"] as? String ?? arrivalStop["theoricDate"] as? String
-            if let depDate = parseDate(firstDateStr), let arrDate = parseDate(arrDateStr), arrDate > depDate {
-                let totalDuration = arrDate.timeIntervalSince(depDate)
-                let elapsed = Date().timeIntervalSince(depDate)
-                globalProgress = max(0.0, min(1.0, elapsed / totalDuration))
-            }
-            
-            var text = ""
-            if isStoppedAtStation, let station = nextStopLabel, !station.isEmpty {
-                text = "En gare de \(shortStationName(station))"
-            } else {
-                let shortDest = shortStationName(destLabel)
-                if !timeRemainingStr.isEmpty {
-                    // Priorité : nom de la gare + temps restant (ex. "Milano 1h05"), sans la vitesse.
-                    text = shortDest.isEmpty
-                        ? timeRemainingStr.trimmingCharacters(in: .whitespaces)
-                        : "\(shortDest) ·\(timeRemainingStr)"
-                } else {
-                    text = shortDest
-                }
-            }
-            
-            // Mise en cache pour le redraw léger (clockTimer)
-            cachedArrivalDate = parseDate(arrivalStop["realDate"] as? String ?? arrivalStop["theoricDate"] as? String)
-            cachedDestShort = shortStationName(destLabel)
-            cachedGlobalProgress = globalProgress
-            cachedSpeed = speed
-            cachedIsStopped = isStoppedAtStation
-            cachedStoppedStation = nextStopLabel.map { shortStationName($0) } ?? ""
-            cachedDelayMins = trainDelayMins
-            cachedDelayCause = trainDelayCause
-
-            customImage = StatusBarImageGenerator.draw(text: text, progress: globalProgress)
-        } else {
-            // Fallback s'il n'y a pas la liste des arrêts
-            if let next = nextStopLabel {
-                if isStoppedAtStation {
-                    barTitle = "En gare de \(next)"
-                } else if speed > 0 {
-                    barTitle = "\(speed) km/h  ›  \(next)"
-                } else {
-                    barTitle = "› \(next)"
-                }
-            } else if speed > 0 {
-                barTitle = "\(speed) km/h"
-            } else {
-                barTitle = "inOui"
-            }
-        }
-
-        // ── Sauvegarde des données brutes pour le mode Debug ────────────
-        var rawData: [String: Any] = [:]
+    private func debugSnapshot(provider: TrainProviderDescriptor, payloads: [String: Any]) -> [String: Any] {
         let ssidInfo = currentSSIDInfo()
-        rawData["ssid"] = ssidInfo.ssid
-        rawData["ssidStatus"] = ssidInfo.status
-        rawData["demoMode"] = MockTrainData.shared.isEnabled
-        rawData["demoServerURL"] = MockTrainData.shared.baseURLString
-        if let g = gps { rawData["gps"] = g }
-        if let d = details { rawData["details"] = d }
-        if let b = bar { rawData["bar"] = b }
-        if let s = stats { rawData["stats"] = s }
-        if let st = status { rawData["status"] = st }
-        if let n = notificationDebug { rawData["notification"] = n }
-        self.lastRawData = rawData
-
-        // ── Construction du modèle de vue pour le panneau SwiftUI ───────
-        var viewState = TrainViewState(
-            trainNumber: trainNumber,
-            destination: destinationLabel,
-            delayMin: trainDelayMins,
-            delayCause: trainDelayCause,
-            stops: [],
-            globalProgress: cachedGlobalProgress,
-            speedKmh: speed,
-            wifiQuality: nil,
-            wifiDevices: nil,
-            dataConsumedMB: nil,
-            dataTotalMB: nil,
-            dataRemainingMB: nil,
-            dataRatio: nil,
-            dataResetTime: nil,
-            arrivalOptions: [],
-            selectedArrivalId: nil
-        )
-
-        // Desserte (timeline)
-        viewState.stops = allStops.enumerated().map { (i, stop) -> StopRow in
-            let lbl = (stop["label"] as? String) ?? "?"
-            let delay = (stop["delay"] as? Int) ?? 0
-            let status: StopStatus = i < nextStopIndex ? .passed : (i == nextStopIndex ? .current : .upcoming)
-            return StopRow(
-                id: (stop["id"] as? String) ?? "\(lbl)-\(i)",
-                label: lbl,
-                theoricTime: formatTime(stop["theoricDate"] as? String) ?? "",
-                realTime: formatTime(stop["realDate"] as? String) ?? "",
-                delayMin: delay,
-                status: status
-            )
-        }
-
-        // Qualité WiFi
-        if let stats = stats {
-            viewState.wifiQuality = stats["quality"] as? Int
-            viewState.wifiDevices = stats["devices"] as? Int
-        }
-
-        // Consommation data
-        if let status = status {
-            let remaining = safeInt(status["remaining_data"])
-            let consumed = safeInt(status["consumed_data"])
-            let total = remaining + consumed
-            if total > 0 {
-                viewState.dataConsumedMB = Double(consumed) / 1000.0
-                viewState.dataTotalMB = Double(total) / 1000.0
-                viewState.dataRemainingMB = Double(remaining) / 1000.0
-                viewState.dataRatio = max(0.0, min(1.0, Double(consumed) / Double(total)))
-            }
-            if let nextResetMs = asDouble(status["next_reset"]) {
-                let resetDate = Date(timeIntervalSince1970: nextResetMs / 1000.0)
-                viewState.dataResetTime = MenuBarController.resetTimeFormatter.string(from: resetDate)
-            }
-        }
-
-        // Sélecteur de gare d'arrivée
-        viewState.arrivalOptions = allStops.enumerated().map { (i, stop) -> ArrivalOption in
-            let lbl = (stop["label"] as? String) ?? "Gare \(i)"
-            return ArrivalOption(id: (stop["id"] as? String) ?? lbl, label: lbl)
-        }
-        let savedId = UserDefaults.standard.string(forKey: "arrivalStationId")
-        let optionIds = viewState.arrivalOptions.map { $0.id }
-        viewState.selectedArrivalId = savedId.flatMap { optionIds.contains($0) ? $0 : nil } ?? optionIds.last
-
-        return (barTitle, customImage, viewState)
-    }
-
-    private func parseDate(_ isoString: String?) -> Date? {
-        guard let isoString else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = f.date(from: isoString) { return date }
-        
-        let f2 = ISO8601DateFormatter()
-        f2.formatOptions = [.withInternetDateTime]
-        return f2.date(from: isoString)
-    }
-
-    /// Convertit une date ISO 8601 en "HH:mm" heure locale.
-    private func formatTime(_ isoString: String?) -> String? {
-        guard let date = parseDate(isoString) else { return nil }
-        let tf = DateFormatter()
-        tf.dateFormat = "HH:mm"
-        tf.timeZone = .current
-        return tf.string(from: date)
-    }
-
-    // MARK: - Helpers de construction
-
-    private func shortStationName(_ name: String) -> String {
-        let exact: [String: String] = [
-            "Paris - Gare de Lyon - Hall 1 & 2":                   "Paris Lyon",
-            "Paris Montparnasse 1 Et 2":            "Montparnasse",
-            "Paris Montparnasse":                   "Montparnasse",
-            "Paris Gare du Nord":                   "Paris Nord",
-            "Paris Saint-Lazare":                   "St-Lazare",
-            "Paris Est":                            "Paris Est",
-            "Marseille-Saint-Charles":              "Marseille",
-            "Marseille Saint-Charles":              "Marseille",
-            "Lyon Part-Dieu":                       "Lyon",
-            "Lyon Perrache":                        "Lyon",
-            "Bordeaux Saint-Jean":                  "Bordeaux",
-            "Toulouse Matabiau":                    "Toulouse",
-            "Lille Flandres":                       "Lille",
-            "Montpellier Saint-Roch":               "Montpellier",
-            "Nice Ville":                           "Nice",
-            "Aix-en-Provence TGV":                  "Aix TGV",
-            "Valence TGV Rhône-Alpes Sud":          "Valence TGV",
-            "Aéroport Charles De Gaulle 2 Tgv":     "CDG TGV",
-            "Charles De Gaulle 2 Tgv":              "CDG TGV",
-            "Strasbourg Ville":                     "Strasbourg",
-            "Marne-La-Vallée Chessy":               "Marne La Vallée",
+        var data: [String: Any] = [
+            "provider": provider.id,
+            "apiHost": provider.apiHost,
+            "ssid": ssidInfo.ssid,
+            "ssidStatus": ssidInfo.status,
+            "demoMode": MockTrainData.shared.isEnabled,
+            "demoServerURL": MockTrainData.shared.baseURLString
         ]
-        if let short = exact[name] { return short }
-        if name.count <= 15 { return name }
-        // Nom long non répertorié : on garde le premier mot, qui est le plus souvent la ville
-        // (ex. "Milano Porta Garibaldi" → "Milano", "Torino Porta Susa" → "Torino").
-        if let firstWord = name.split(separator: " ").first, firstWord.count >= 3 {
-            return String(firstWord)
+        if !TrainProviders.hostChecks.isEmpty {
+            data["apiHostOnboard"] = TrainProviders.hostChecks
         }
-        return String(name.prefix(14)) + "…"
+        for (key, value) in payloads { data[key] = value }
+        return data
+    }
+
+    // MARK: - Notifications avant arrivée
+
+    /// Réservée aux réseaux qui exposent une desserte. Rend de quoi alimenter le dump debug.
+    @discardableResult
+    private func notifyBeforeArrivalIfNeeded(snapshot: TrainSnapshot) -> [String: Any]? {
+        guard snapshot.viewState.provider.features.contains(.journey),
+              let journey = snapshot.journey,
+              let target = notificationTargetStop(stops: snapshot.viewState.stops, journey: journey),
+              let arrivalDate = target.arrivalDate
+        else { return nil }
+
+        let minutesRemaining = Int(arrivalDate.timeIntervalSinceNow / 60)
+        maybeNotifyBeforeArrival(stopId: target.id,
+                                 stopLabel: target.label,
+                                 minutesRemaining: minutesRemaining,
+                                 isStoppedAtStation: journey.isStoppedAtStation)
+
+        return [
+            "enabled": isBeforeArrivalNotificationEnabled,
+            "target": arrivalNotificationTarget.rawValue,
+            "targetStopId": target.id,
+            "targetStopLabel": target.label,
+            "minutesRemaining": minutesRemaining,
+            "leadTime": beforeArrivalNotificationLeadTime,
+            "isStoppedAtStation": journey.isStoppedAtStation
+        ]
+    }
+
+    private func notificationTargetStop(stops: [StopRow], journey: JourneyContext) -> StopRow? {
+        guard !stops.isEmpty else { return nil }
+
+        switch arrivalNotificationTarget {
+        case .selectedArrival:
+            let index = journey.selectedArrivalIndex
+            return stops.indices.contains(index) ? stops[index] : nil
+        case .nextStop:
+            let index = journey.isStoppedAtStation
+                ? min(journey.nextStopIndex + 1, stops.count - 1)
+                : journey.nextStopIndex
+            return stops.indices.contains(index) ? stops[index] : nil
+        }
+    }
+
+    private func maybeNotifyBeforeArrival(stopId: String,
+                                          stopLabel: String,
+                                          minutesRemaining: Int,
+                                          isStoppedAtStation: Bool) {
+        guard isBeforeArrivalNotificationEnabled else { return }
+        guard !isStoppedAtStation else { return }
+
+        // Heure cible dépassée : on réarme pour les prochains arrêts.
+        if minutesRemaining <= 0 {
+            if lastArrivalNotifiedStopId == stopId {
+                lastArrivalNotifiedStopId = nil
+            }
+            return
+        }
+
+        guard minutesRemaining <= beforeArrivalNotificationLeadTime else { return }
+        guard lastArrivalNotifiedStopId != stopId else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Arrivée imminente"
+        content.body = "Vous arrivez à \(stopLabel) dans environ \(minutesRemaining) min."
+        content.sound = .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: "arrival-\(stopId)", content: content, trigger: trigger)
+        notificationCenter.add(request) { _ in }
+
+        lastArrivalNotifiedStopId = stopId
+    }
+
+    // MARK: - Réglages
+
+    private var isBeforeArrivalNotificationEnabled: Bool {
+        UserDefaults.standard.bool(forKey: notifyBeforeArrivalEnabledKey)
+    }
+
+    private var beforeArrivalNotificationLeadTime: Int {
+        let value = UserDefaults.standard.integer(forKey: notifyBeforeArrivalMinutesKey)
+        return allowedNotificationLeadTimes.contains(value) ? value : 10
+    }
+
+    private var lastArrivalNotifiedStopId: String? {
+        get { UserDefaults.standard.string(forKey: lastArrivalNotificationStopIdKey) }
+        set { UserDefaults.standard.set(newValue, forKey: lastArrivalNotificationStopIdKey) }
+    }
+
+    private var arrivalNotificationTarget: ArrivalNotificationTarget {
+        guard let raw = UserDefaults.standard.string(forKey: notifyBeforeArrivalTargetKey),
+              let target = ArrivalNotificationTarget(rawValue: raw)
+        else { return .selectedArrival }
+        return target
+    }
+
+    private func registerNotificationDefaults() {
+        UserDefaults.standard.register(defaults: [
+            notifyBeforeArrivalEnabledKey: true,
+            notifyBeforeArrivalMinutesKey: 10,
+            notifyBeforeArrivalTargetKey: ArrivalNotificationTarget.selectedArrival.rawValue
+        ])
+    }
+
+    // MARK: - SSID / autorisations
+
+    private func currentSSIDInfo() -> (ssid: String, status: String) {
+        if let ssid = CWWiFiClient.shared().interface()?.ssid(), !ssid.isEmpty {
+            return (ssid, "ok")
+        }
+
+        switch locationManager.authorizationStatus {
+        case .notDetermined:
+            return ("Inconnu", "location_not_determined")
+        case .denied:
+            return ("Inconnu", "location_denied")
+        case .restricted:
+            return ("Inconnu", "location_restricted")
+        case .authorized, .authorizedAlways:
+            if CWWiFiClient.shared().interface() == nil {
+                return ("Inconnu", "wifi_interface_unavailable")
+            }
+            return ("Inconnu", "ssid_unavailable")
+        @unknown default:
+            return ("Inconnu", "unknown")
+        }
+    }
+
+    private func requestSSIDAuthorizationIfNeeded() {
+        guard locationManager.authorizationStatus == .notDetermined else { return }
+        // La politique d'activation (.regular vs .accessory) est gérée dans main.swift.
+        locationManager.requestWhenInUseAuthorization()
     }
 
     // MARK: - Handlers
@@ -626,186 +452,25 @@ final class MenuBarController: NSObject {
         NSWorkspace.shared.open(url)
     }
 
-    // MARK: - Conversions sûres
-
-    private func safeInt(_ value: Any?) -> Int {
-        guard let value else { return 0 }
-        if let n = value as? NSNumber { return n.intValue }
-        if let s = value as? String, let d = Double(s) { return Int(d) }
-        return 0
-    }
-
-    private func asDouble(_ value: Any?) -> Double? {
-        guard let value else { return nil }
-        if let n = value as? NSNumber { return n.doubleValue }
-        if let s = value as? String    { return Double(s) }
-        return nil
-    }
-
-    private func asBool(_ value: Any?) -> Bool? {
-        guard let value else { return nil }
-        if let b = value as? Bool { return b }
-        if let n = value as? NSNumber { return n.intValue != 0 }
-        if let s = value as? String {
-            switch s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "true", "1", "yes", "oui":
-                return true
-            case "false", "0", "no", "non":
-                return false
-            default:
-                return nil
-            }
-        }
-        return nil
-    }
-
-    private var isBeforeArrivalNotificationEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: notifyBeforeArrivalEnabledKey) }
-        set { UserDefaults.standard.set(newValue, forKey: notifyBeforeArrivalEnabledKey) }
-    }
-
-    private var beforeArrivalNotificationLeadTime: Int {
-        get {
-            let value = UserDefaults.standard.integer(forKey: notifyBeforeArrivalMinutesKey)
-            return allowedNotificationLeadTimes.contains(value) ? value : 10
-        }
-        set {
-            let safeValue = allowedNotificationLeadTimes.contains(newValue) ? newValue : 10
-            UserDefaults.standard.set(safeValue, forKey: notifyBeforeArrivalMinutesKey)
-        }
-    }
-
-    private var lastArrivalNotifiedStopId: String? {
-        get { UserDefaults.standard.string(forKey: lastArrivalNotificationStopIdKey) }
-        set { UserDefaults.standard.set(newValue, forKey: lastArrivalNotificationStopIdKey) }
-    }
-
-    private var arrivalNotificationTarget: ArrivalNotificationTarget {
-        get {
-            guard let raw = UserDefaults.standard.string(forKey: notifyBeforeArrivalTargetKey),
-                  let target = ArrivalNotificationTarget(rawValue: raw) else {
-                return .selectedArrival
-            }
-            return target
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: notifyBeforeArrivalTargetKey)
-        }
-    }
-
-    private func registerNotificationDefaults() {
-        UserDefaults.standard.register(defaults: [
-            notifyBeforeArrivalEnabledKey: true,
-            notifyBeforeArrivalMinutesKey: 10,
-            notifyBeforeArrivalTargetKey: ArrivalNotificationTarget.selectedArrival.rawValue
-        ])
-    }
-
-    private func currentSSIDInfo() -> (ssid: String, status: String) {
-        if let ssid = CWWiFiClient.shared().interface()?.ssid(), !ssid.isEmpty {
-            return (ssid, "ok")
-        }
-
-        let auth = locationManager.authorizationStatus
-        switch auth {
-        case .notDetermined:
-            return ("Inconnu", "location_not_determined")
-        case .denied:
-            return ("Inconnu", "location_denied")
-        case .restricted:
-            return ("Inconnu", "location_restricted")
-        case .authorized, .authorizedAlways:
-            if CWWiFiClient.shared().interface() == nil {
-                return ("Inconnu", "wifi_interface_unavailable")
-            }
-            return ("Inconnu", "ssid_unavailable")
-        @unknown default:
-            return ("Inconnu", "unknown")
-        }
-    }
-
-    private func requestSSIDAuthorizationIfNeeded() {
-        guard locationManager.authorizationStatus == .notDetermined else { return }
-        // La politique d'activation (.regular vs .accessory) est gérée dans main.swift
-        // et AppDelegate selon le statut TCC au démarrage.
-        locationManager.requestWhenInUseAuthorization()
-    }
-
-    private func notificationTargetStop(allStops: [[String: Any]],
-                                        nextStopIndex: Int,
-                                        isStoppedAtStation: Bool,
-                                        arrivalStationIndex: Int) -> [String: Any]? {
-        guard !allStops.isEmpty else { return nil }
-
-        switch arrivalNotificationTarget {
-        case .selectedArrival:
-            return allStops.indices.contains(arrivalStationIndex) ? allStops[arrivalStationIndex] : nil
-        case .nextStop:
-            let index = isStoppedAtStation
-                ? min(nextStopIndex + 1, allStops.count - 1)
-                : nextStopIndex
-            return allStops.indices.contains(index) ? allStops[index] : nil
-        }
-    }
-
-    private func maybeNotifyBeforeArrival(stopId: String,
-                                          stopLabel: String,
-                                          minutesRemaining: Int,
-                                          isStoppedAtStation: Bool) {
-        guard isBeforeArrivalNotificationEnabled else { return }
-        guard !isStoppedAtStation else { return }
-
-        // Le train est arrivé ou a dépassé l'heure cible: on autorise les futures notifications.
-        if minutesRemaining <= 0 {
-            if lastArrivalNotifiedStopId == stopId {
-                lastArrivalNotifiedStopId = nil
-            }
-            return
-        }
-
-        let leadTime = beforeArrivalNotificationLeadTime
-        guard minutesRemaining <= leadTime else { return }
-        guard lastArrivalNotifiedStopId != stopId else { return }
-
-        let content = UNMutableNotificationContent()
-        content.title = "Arrivée imminente"
-        content.body = "Vous arrivez à \(stopLabel) dans environ \(minutesRemaining) min."
-        content.sound = .default
-
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let request = UNNotificationRequest(identifier: "arrival-\(stopId)", content: content, trigger: trigger)
-        notificationCenter.add(request) { _ in }
-
-        lastArrivalNotifiedStopId = stopId
-    }
-
-    // MARK: - Actions
-
-    @objc private func openURL(_ sender: NSMenuItem) {
-        guard let str = sender.representedObject as? String,
-              let url = URL(string: str) else { return }
-        NSWorkspace.shared.open(url)
-    }
-
     @objc private func openAbout() {
         NSWorkspace.shared.open(URL(string: "https://github.com/antvgr/sncfwifi-macwidget")!)
     }
 
     @objc private func copyDebugData() {
         guard let data = lastRawData,
-              let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted]),
-              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
-        
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(jsonString, forType: .string)
+              let json = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted]),
+              let text = String(data: json, encoding: .utf8)
+        else { return }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
 extension MenuBarController: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        // Repasser en mode accessory (barre des menus, sans icône Dock) dans tous les cas,
-        // que l'utilisateur ait accepté ou refusé.
+        // Repasser en accessory (barre de menus, sans icône Dock) que l'utilisateur ait
+        // accepté ou refusé.
         if NSApp.activationPolicy() == .regular {
             NSApp.setActivationPolicy(.accessory)
         }

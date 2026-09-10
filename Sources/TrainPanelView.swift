@@ -5,8 +5,16 @@ import Combine
 private let panelWidth: CGFloat = 300
 
 extension Color {
-    /// Carmillon — couleur de marque SNCF / TGV INOUI (#7D206F).
-    static let carmillon = Color(red: 125.0 / 255.0, green: 32.0 / 255.0, blue: 111.0 / 255.0)
+    init(hex: UInt32) {
+        self.init(red: Double((hex >> 16) & 0xFF) / 255.0,
+                  green: Double((hex >> 8) & 0xFF) / 255.0,
+                  blue: Double(hex & 0xFF) / 255.0)
+    }
+}
+
+extension TrainProviderDescriptor {
+    /// Couleur d'accent du panneau. Portée par le descripteur : aucune vue ne connaît le réseau.
+    var accent: Color { Color(hex: accentHex) }
 }
 
 // MARK: - Vue racine
@@ -64,12 +72,13 @@ private struct NotConnectedView: View {
                     .foregroundColor(.secondary)
                 Button("Ouvrir le panneau démo") { store.onOpenDemoPanel() }
             } else {
-                Text("Non connecté au WiFi SNCF inOui")
+                Text("Non connecté au WiFi d'un train")
                     .font(.headline)
                     .multilineTextAlignment(.center)
-                Text("(ou API du train indisponible)")
+                Text("\(TrainProviders.knownNetworkNames.joined(separator: ", ")) — ou API du train indisponible")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity)
@@ -90,13 +99,18 @@ private struct ConnectedView: View {
 
                 if !state.stops.isEmpty {
                     Divider()
-                    TimelineView(stops: state.stops)
+                    TimelineView(stops: state.stops, tint: state.provider.accent)
+                }
+
+                if !state.metrics.isEmpty {
+                    Divider()
+                    MetricsView(rows: state.metrics, tint: state.provider.accent)
                 }
 
                 if state.wifiQuality != nil || state.dataRatio != nil {
                     Divider()
                     if let quality = state.wifiQuality {
-                        WifiView(quality: quality, devices: state.wifiDevices)
+                        WifiView(quality: quality, devices: state.wifiDevices, tint: state.provider.accent)
                     }
                     if let ratio = state.dataRatio {
                         DataView(state: state, ratio: ratio)
@@ -122,12 +136,12 @@ private struct HeaderView: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "tram.fill")
                     .font(.system(size: 18))
-                    .foregroundColor(.carmillon)
+                    .foregroundColor(state.provider.accent)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(state.trainNumber.map { "TGV INOUI n° \($0)" } ?? "TGV INOUI")
+                    Text(state.headerTitle)
                         .font(.system(size: 14, weight: .semibold))
-                    if let dest = state.destination, !dest.isEmpty {
-                        Text("→ \(dest)")
+                    if let subtitle = state.headerSubtitle, !subtitle.isEmpty {
+                        Text(subtitle)
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
@@ -136,7 +150,7 @@ private struct HeaderView: View {
                 if state.speedKmh > 0 {
                     HStack(spacing: 4) {
                         Image(systemName: "speedometer")
-                            .foregroundColor(.carmillon)
+                            .foregroundColor(state.provider.accent)
                         Text("\(state.speedKmh) km/h")
                             .foregroundColor(.primary)
                     }
@@ -159,9 +173,68 @@ private struct HeaderView: View {
     }
 
     private var delayText: String {
-        var t = "Retard +\(state.delayMin) min"
-        if !state.delayCause.isEmpty { t += " · \(state.delayCause)" }
-        return t
+        state.delayCause.isEmpty
+            ? "Retard +\(state.delayMin) min"
+            : "Retard +\(state.delayMin) min · \(state.delayCause)"
+    }
+}
+
+// MARK: - Métriques du réseau
+
+/// Rend les `MetricRow` fournies par la source : un réseau expose ses spécificités
+/// (position, cap, opérateurs mobiles…) sans qu'aucune vue ne le connaisse.
+private struct MetricsView: View {
+    let rows: [MetricRow]
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(groups) { group in
+                if group.isFootnote {
+                    Text(group.rows.map { $0.text }.joined(separator: " · "))
+                        .font(.system(size: 10))
+                        .foregroundColor(Color.secondary.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack(spacing: 16) {
+                        ForEach(group.rows) { row in
+                            MetricPill(symbol: row.symbol, text: row.text, tint: tint)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+    }
+
+    private struct Group: Identifiable {
+        let id: String
+        let rows: [MetricRow]
+        var isFootnote: Bool { rows.first?.isFootnote ?? false }
+    }
+
+    /// Deux métriques `.half` consécutives partagent une ligne.
+    private var groups: [Group] {
+        var groups: [Group] = []
+        var pending: [MetricRow] = []
+
+        func flush() {
+            guard !pending.isEmpty else { return }
+            groups.append(Group(id: pending[0].id, rows: pending))
+            pending = []
+        }
+
+        for row in rows {
+            if row.span == .half, !row.isFootnote {
+                pending.append(row)
+                if pending.count == 2 { flush() }
+            } else {
+                flush()
+                groups.append(Group(id: row.id, rows: [row]))
+            }
+        }
+        flush()
+        return groups
     }
 }
 
@@ -169,11 +242,13 @@ private struct HeaderView: View {
 
 private struct TimelineView: View {
     let stops: [StopRow]
+    let tint: Color
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
                 StopRowView(stop: stop,
+                            tint: tint,
                             isFirst: index == 0,
                             isLast: index == stops.count - 1)
             }
@@ -183,15 +258,12 @@ private struct TimelineView: View {
 
 private struct StopRowView: View {
     let stop: StopRow
+    let tint: Color
     let isFirst: Bool
     let isLast: Bool
 
     private var dotColor: Color {
-        switch stop.status {
-        case .passed:   return .carmillon
-        case .current:  return .carmillon
-        case .upcoming: return .secondary
-        }
+        stop.status == .upcoming ? .secondary : tint
     }
 
     private var symbol: String {
@@ -204,7 +276,6 @@ private struct StopRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Colonne rail + pastille
             ZStack(alignment: .top) {
                 Rectangle()
                     .fill(Color.secondary.opacity(0.35))
@@ -218,7 +289,6 @@ private struct StopRowView: View {
             }
             .frame(width: 18)
 
-            // Libellé + horaires
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(stop.label)
                     .font(.system(size: 12, weight: stop.status == .current ? .semibold : .regular))
@@ -246,27 +316,27 @@ private struct StopRowView: View {
 private struct WifiView: View {
     let quality: Int
     let devices: Int?
+    let tint: Color
 
     var body: some View {
         HStack(spacing: 16) {
             MetricPill(symbol: quality >= 3 ? "wifi" : "wifi.exclamationmark",
                        text: wifiText,
-                       tint: quality < 3 ? .orange : .carmillon)
+                       tint: quality < 3 ? .orange : tint)
             Spacer(minLength: 0)
         }
     }
 
     private var wifiText: String {
-        var t = "WiFi \(quality)/5"
-        if let d = devices { t += " · \(d) pers." }
-        return t
+        guard let devices else { return "WiFi \(quality)/5" }
+        return "WiFi \(quality)/5 · \(devices) pers."
     }
 }
 
 private struct MetricPill: View {
     let symbol: String
     let text: String
-    var tint: Color = .carmillon
+    var tint: Color
 
     var body: some View {
         HStack(spacing: 5) {
@@ -294,7 +364,7 @@ private struct DataView: View {
                     .foregroundColor(.secondary)
             }
             ProgressView(value: min(max(ratio, 0), 1))
-                .accentColor(ratio > 0.85 ? .red : .carmillon)
+                .accentColor(ratio > 0.85 ? .red : state.provider.accent)
             if let consumed = state.dataConsumedMB, let total = state.dataTotalMB {
                 Text(usageLine(consumed: consumed, total: total, reset: state.dataResetTime))
                     .font(.system(size: 11))
@@ -304,9 +374,9 @@ private struct DataView: View {
     }
 
     private func usageLine(consumed: Double, total: Double, reset: String?) -> String {
-        var t = String(format: "%.1f / %.1f Mo utilisés", consumed, total)
-        if let reset = reset { t += " · reset \(reset)" }
-        return t
+        var text = String(format: "%.1f / %.1f Mo utilisés", consumed, total)
+        if let reset { text += " · reset \(reset)" }
+        return text
     }
 }
 
@@ -318,10 +388,10 @@ private struct RefreshStatusView: View {
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        f.timeZone = .current
-        return f
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        formatter.timeZone = .current
+        return formatter
     }()
 
     var body: some View {
@@ -373,12 +443,20 @@ private struct FooterView: View {
         .padding(.vertical, 8)
     }
 
-    /// Options de gare d'arrivée, disponibles uniquement quand un train est connecté.
-    private var arrival: (options: [ArrivalOption], selectedId: String?)? {
-        if case let .connected(state) = store.state, !state.arrivalOptions.isEmpty {
-            return (state.arrivalOptions, state.selectedArrivalId)
-        }
+    private var connectedState: TrainViewState? {
+        if case let .connected(state) = store.state { return state }
         return nil
+    }
+
+    /// Réglages d'arrivée inutiles sur un réseau sans desserte (Eurostar) : on les masque
+    /// plutôt que d'afficher des options sans effet.
+    private var showsArrivalSettings: Bool {
+        connectedState?.provider.features.contains(.journey) ?? true
+    }
+
+    private var arrival: (options: [ArrivalOption], selectedId: String?)? {
+        guard let state = connectedState, !state.arrivalOptions.isEmpty else { return nil }
+        return (state.arrivalOptions, state.selectedArrivalId)
     }
 
     private var settingsMenu: some View {
@@ -396,37 +474,41 @@ private struct FooterView: View {
                 Divider()
             }
 
-            Button {
-                notifyEnabled.toggle()
-                store.onSettingsChanged()
-            } label: {
-                checkLabel("Notification avant arrivée", on: notifyEnabled)
-            }
+            if showsArrivalSettings {
+                Button {
+                    notifyEnabled.toggle()
+                    store.onSettingsChanged()
+                } label: {
+                    checkLabel("Notification avant arrivée", on: notifyEnabled)
+                }
 
-            Menu("Délai de notification") {
-                ForEach(leadTimes, id: \.self) { minutes in
-                    Button {
-                        notifyMinutes = minutes
-                        store.onSettingsChanged()
-                    } label: {
-                        checkLabel("\(minutes) min", on: notifyMinutes == minutes)
+                Menu("Délai de notification") {
+                    ForEach(leadTimes, id: \.self) { minutes in
+                        Button {
+                            notifyMinutes = minutes
+                            store.onSettingsChanged()
+                        } label: {
+                            checkLabel("\(minutes) min", on: notifyMinutes == minutes)
+                        }
                     }
                 }
-            }
 
-            Menu("Type de notification") {
-                Button {
-                    notifyTarget = "selectedArrival"
-                    store.onSettingsChanged()
-                } label: {
-                    checkLabel("Gare d'arrivée sélectionnée", on: notifyTarget == "selectedArrival")
+                Menu("Type de notification") {
+                    Button {
+                        notifyTarget = "selectedArrival"
+                        store.onSettingsChanged()
+                    } label: {
+                        checkLabel("Gare d'arrivée sélectionnée", on: notifyTarget == "selectedArrival")
+                    }
+                    Button {
+                        notifyTarget = "nextStop"
+                        store.onSettingsChanged()
+                    } label: {
+                        checkLabel("Prochaine gare", on: notifyTarget == "nextStop")
+                    }
                 }
-                Button {
-                    notifyTarget = "nextStop"
-                    store.onSettingsChanged()
-                } label: {
-                    checkLabel("Prochaine gare", on: notifyTarget == "nextStop")
-                }
+            } else {
+                Text("Aucun réglage pour ce réseau")
             }
         } label: {
             Image(systemName: "gearshape.fill")
