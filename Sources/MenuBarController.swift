@@ -22,6 +22,10 @@ final class MenuBarController: NSObject {
     /// par-dessus l'icône « réseau inconnu ».
     private var badge: StatusBadge?
 
+    /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
+    /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
+    private var refreshToken = 0
+
     /// Fournisseur retenu au dernier cycle réussi. Sert quand le SSID est illisible
     /// (autorisation Localisation refusée) : évite de re-sonder tous les réseaux à chaque fois.
     private var detectedProvider: TrainDataSource?
@@ -169,9 +173,12 @@ final class MenuBarController: NSObject {
     // MARK: - Détection du réseau
 
     @objc func refresh() {
+        refreshToken += 1
+        let token = refreshToken
+
         // Le mode démo rejoue l'API SNCF, quel que soit le réseau courant.
         if MockTrainData.shared.isEnabled {
-            if let demo = TrainProviders.demoSource { fetchAndPublish(from: demo) }
+            if let demo = TrainProviders.demoSource { fetchAndPublish(from: demo, token: token) }
             return
         }
 
@@ -179,7 +186,7 @@ final class MenuBarController: NSObject {
         if !ssid.isEmpty {
             if let source = TrainProviders.source(forSSID: ssid) ?? providerBySSID[ssid] {
                 detectedProvider = source
-                fetchAndPublish(from: source)
+                fetchAndPublish(from: source, token: token)
                 return
             }
             // SSID sondé sans succès récemment : aucun appel réseau, on épargne la batterie.
@@ -190,7 +197,7 @@ final class MenuBarController: NSObject {
                 return
             }
             probeProviders { [weak self] source in
-                guard let self else { return }
+                guard let self, self.isCurrent(token) else { return }
                 guard let source else {
                     self.nonTrainSSIDs[ssid] = Date()
                     self.detectedProvider = nil
@@ -199,25 +206,29 @@ final class MenuBarController: NSObject {
                 }
                 self.providerBySSID[ssid] = source
                 self.detectedProvider = source
-                self.fetchAndPublish(from: source)
+                self.fetchAndPublish(from: source, token: token)
             }
             return
         }
 
         // SSID illisible (Localisation refusée, vieux macOS, réseau masqué).
         if let source = detectedProvider {
-            fetchAndPublish(from: source)
+            fetchAndPublish(from: source, token: token)
             return
         }
         probeProviders { [weak self] source in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             guard let source else {
                 self.showNotConnected()
                 return
             }
             self.detectedProvider = source
-            self.fetchAndPublish(from: source)
+            self.fetchAndPublish(from: source, token: token)
         }
+    }
+
+    private func isCurrent(_ token: Int) -> Bool {
+        token == refreshToken
     }
 
     /// Sonde tous les réseaux en parallèle. Aucun n'est privilégié : l'ordre de
@@ -262,9 +273,9 @@ final class MenuBarController: NSObject {
 
     // MARK: - Refresh
 
-    private func fetchAndPublish(from source: TrainDataSource) {
+    private func fetchAndPublish(from source: TrainDataSource, token: Int) {
         source.fetch { [weak self] snapshot in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
 
             guard let snapshot else {
                 self.lastRawData = self.debugSnapshot(provider: source.descriptor, payloads: [:])
