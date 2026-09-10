@@ -125,7 +125,8 @@ enum TrainProviders {
     // ⬇️ AJOUTER UN RÉSEAU ICI (et dans build.sh). L'ordre ne sert que de départage. ⬇️
     static let all: [TrainDataSource] = [
         SNCFDataSource(),
-        EurostarDataSource()
+        EurostarDataSource(),
+        ICEDataSource()
     ]
 
     static func source(forSSID ssid: String) -> TrainDataSource? {
