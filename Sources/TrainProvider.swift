@@ -11,6 +11,8 @@ struct TrainProviderFeatures: OptionSet {
     static let uplink        = TrainProviderFeatures(rawValue: 1 << 3)
     static let dataQuota     = TrainProviderFeatures(rawValue: 1 << 4)
     static let wifiQuality   = TrainProviderFeatures(rawValue: 1 << 5)
+    /// Carte du bar-restaurant : ouvre le panneau restaurant du popover.
+    static let onboardMenu   = TrainProviderFeatures(rawValue: 1 << 6)
 }
 
 /// Fiche d'identité d'un réseau : tout ce qui ne demande aucun appel réseau.
@@ -88,9 +90,16 @@ protocol TrainDataSource: AnyObject {
     func probe(completion: @escaping (Bool) -> Void)
     /// nil = API injoignable.
     func fetch(completion: @escaping (TrainSnapshot?) -> Void)
+    /// Carte du bar-restaurant, chargée à l'ouverture du panneau et non à chaque cycle.
+    /// `nil` = indisponible. Un réseau sans carte n'a rien à implémenter.
+    func fetchMenu(completion: @escaping (OnboardMenu?) -> Void)
 }
 
 extension TrainDataSource {
+    func fetchMenu(completion: @escaping (OnboardMenu?) -> Void) {
+        completion(nil)
+    }
+
     /// Sonde utilisée par la détection : contrôle d'hôte privé si le réseau l'exige,
     /// puis appel API. Notifie sur le main thread.
     func probeOnboard(completion: @escaping (Bool) -> Void) {

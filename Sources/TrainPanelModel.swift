@@ -19,6 +19,17 @@ struct StopRow: Identifiable {
     let arrivalDate: Date?
     let delayMin: Int
     let status: StopStatus
+    /// Voie réelle, quand le réseau l'expose. Chaîne libre : « 4 », « 3/4 », « Fern 5 ».
+    var platform: String?
+    /// Voie initialement prévue, pour signaler un changement.
+    var scheduledPlatform: String?
+
+    /// Vrai quand la voie annoncée n'est plus celle prévue.
+    var platformChanged: Bool {
+        guard let platform, let scheduledPlatform, !platform.isEmpty, !scheduledPlatform.isEmpty
+        else { return false }
+        return platform != scheduledPlatform
+    }
 }
 
 struct ArrivalOption: Identifiable {
@@ -45,6 +56,43 @@ struct MetricRow: Identifiable {
     static func footnote(_ text: String) -> MetricRow {
         MetricRow(id: "footnote", symbol: "", text: text, isFootnote: true)
     }
+}
+
+/// Carte du bar-restaurant, chargée à la demande et non à chaque cycle.
+struct OnboardMenu {
+    struct Item: Identifiable {
+        let id: String
+        let title: String
+        let detail: String?
+        /// Prix déjà formaté (« 13,90 € »), nil si le réseau n'en annonce pas.
+        let price: String?
+        let available: Bool
+    }
+
+    struct Category: Identifiable {
+        let id: String
+        let name: String
+        let items: [Item]
+        var availableCount: Int { items.filter(\.available).count }
+    }
+
+    let categories: [Category]
+
+    var itemCount: Int { categories.reduce(0) { $0 + $1.items.count } }
+    var availableCount: Int { categories.reduce(0) { $0 + $1.availableCount } }
+}
+
+enum MenuState {
+    case idle
+    case loading
+    case loaded(OnboardMenu)
+    case unavailable
+}
+
+/// Vue affichée par le popover. Le panneau restaurant est un second écran, pas une fenêtre.
+enum PanelRoute {
+    case main
+    case menu
 }
 
 /// Instantané de tout ce que le panneau affiche pour un train connecté.
@@ -117,6 +165,8 @@ final class TrainStore: ObservableObject {
     @Published var state: PanelState = .loading
 
     @Published var lastRefreshDate: Date?
+    @Published var route: PanelRoute = .main
+    @Published var menu: MenuState = .idle
     /// Doit refléter le Timer du contrôleur.
     let refreshInterval: TimeInterval = 30
 
@@ -130,6 +180,9 @@ final class TrainStore: ObservableObject {
     var onOpenDemoPanel: () -> Void = {}
     var onCopyJSON: () -> Void = {}
     var onOpenAbout: () -> Void = {}
+    /// Ouvre le panneau restaurant, ce qui déclenche le chargement de la carte.
+    var onOpenMenu: () -> Void = {}
+    var onCloseMenu: () -> Void = {}
     /// Appelée quand un réglage de notification change (pour relancer un refresh).
     var onSettingsChanged: () -> Void = {}
 }

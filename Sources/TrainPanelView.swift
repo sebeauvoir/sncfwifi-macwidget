@@ -33,18 +33,28 @@ struct TrainPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            switch store.state {
-            case .loading:
-                LoadingView()
-            case .notConnected(let demoMode):
-                NotConnectedView(demoMode: demoMode)
-            case .connected(let state):
-                ConnectedView(state: state)
+            switch store.route {
+            case .menu:
+                OnboardMenuView(tint: connectedState?.provider.accent ?? .secondary)
+            case .main:
+                switch store.state {
+                case .loading:
+                    LoadingView()
+                case .notConnected(let demoMode):
+                    NotConnectedView(demoMode: demoMode)
+                case .connected(let state):
+                    ConnectedView(state: state)
+                }
             }
             Divider()
             FooterView()
         }
         .frame(width: panelWidth)
+    }
+
+    private var connectedState: TrainViewState? {
+        if case let .connected(state) = store.state { return state }
+        return nil
     }
 }
 
@@ -312,6 +322,32 @@ private struct StopRowView: View {
         }
     }
 
+    /// Voie annoncée. En cas de changement, la voie prévue est barrée et la nouvelle passe en
+    /// orange — même traitement que les horaires retardés juste à côté.
+    @ViewBuilder
+    private var platformLabel: some View {
+        if let platform = stop.platform, !platform.isEmpty {
+            if stop.platformChanged, let scheduled = stop.scheduledPlatform {
+                HStack(spacing: 3) {
+                    Text("voie")
+                        .foregroundColor(.secondary)
+                    Text(scheduled)
+                        .strikethrough()
+                        .foregroundColor(.secondary)
+                    Text(platform)
+                        .foregroundColor(.orange)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .fixedSize()
+            } else {
+                Text("voie \(platform)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+            }
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             ZStack(alignment: .top) {
@@ -331,6 +367,8 @@ private struct StopRowView: View {
                 Text(stop.label)
                     .font(.system(size: 12, weight: stop.status == .current ? .semibold : .regular))
                     .foregroundColor(stop.status == .upcoming ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer(minLength: 4)
                 if stop.delayMin > 0 && !stop.theoricTime.isEmpty && stop.theoricTime != stop.realTime {
                     Text(stop.theoricTime)
@@ -342,6 +380,7 @@ private struct StopRowView: View {
                     Text(stop.realTime)
                         .foregroundColor(.secondary)
                 }
+                platformLabel
             }
             .font(.system(size: 12))
             .padding(.bottom, isLast ? 0 : 12)
@@ -453,6 +492,136 @@ private struct RefreshStatusView: View {
     }
 }
 
+// MARK: - Carte du bar-restaurant
+
+/// Second écran du popover. La carte n'est chargée qu'à l'ouverture, jamais dans le cycle de
+/// rafraîchissement : elle pèse ~90 Ko et ne change pas d'une minute à l'autre.
+private struct OnboardMenuView: View {
+    @EnvironmentObject var store: TrainStore
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            content
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.onCloseMenu()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Retour")
+
+            Text("Bar-restaurant")
+                .font(.system(size: 14, weight: .semibold))
+            Spacer(minLength: 4)
+            if case let .loaded(menu) = store.menu {
+                Text("\(menu.availableCount)/\(menu.itemCount)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch store.menu {
+        case .idle, .loading:
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Chargement de la carte…")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+
+        case .unavailable:
+            VStack(spacing: 8) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundColor(.secondary)
+                Text("Carte indisponible")
+                    .font(.headline)
+                Text("Le service de commande à bord n'est pas actif.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 24)
+
+        case .loaded(let menu):
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    // Libellés en allemand : c'est la seule langue que l'API expose.
+                    ForEach(menu.categories) { category in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(category.name)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(tint)
+                                Spacer()
+                                Text("\(category.availableCount)/\(category.items.count)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            ForEach(category.items) { item in
+                                itemRow(item)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+            .frame(maxHeight: 420)
+        }
+    }
+
+    private func itemRow(_ item: OnboardMenu.Item) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.system(size: 12))
+                    .foregroundColor(item.available ? .primary : .secondary)
+                    .strikethrough(!item.available)
+                if let detail = item.detail {
+                    Text(detail)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color.secondary.opacity(0.8))
+                }
+            }
+            Spacer(minLength: 4)
+            if item.available {
+                if let price = item.price {
+                    Text(price)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .fixedSize()
+                }
+            } else {
+                Text("épuisé")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.orange)
+                    .fixedSize()
+            }
+        }
+    }
+}
+
 // MARK: - Pied de page (actions + réglages + debug)
 
 private struct FooterView: View {
@@ -461,6 +630,7 @@ private struct FooterView: View {
     @AppStorage("notifyBeforeArrivalEnabled") private var notifyEnabled = true
     @AppStorage("notifyBeforeArrivalMinutes") private var notifyMinutes = 10
     @AppStorage("notifyBeforeArrivalTarget") private var notifyTarget = "selectedArrival"
+    @AppStorage("notifyPlatformChangeEnabled") private var notifyPlatform = true
     @AppStorage("isDemoMode") private var demoMode = false
     @AppStorage("demoOperator") private var demoProvider = "sncf"
 
@@ -469,6 +639,10 @@ private struct FooterView: View {
     var body: some View {
         HStack(spacing: 4) {
             footerButton("arrow.2.circlepath", help: "Actualiser") { store.onRefresh() }
+
+            if showsMenuButton {
+                footerButton("fork.knife", help: "Bar-restaurant") { store.onOpenMenu() }
+            }
 
             settingsMenu
             debugMenu
@@ -485,6 +659,11 @@ private struct FooterView: View {
     private var connectedState: TrainViewState? {
         if case let .connected(state) = store.state { return state }
         return nil
+    }
+
+    /// L'icône n'apparaît que sur un réseau qui expose une carte.
+    private var showsMenuButton: Bool {
+        connectedState?.provider.features.contains(.onboardMenu) ?? false
     }
 
     /// Réglages d'arrivée inutiles sur un réseau sans desserte (Eurostar) : on les masque
@@ -545,6 +724,13 @@ private struct FooterView: View {
                     } label: {
                         checkLabel("Prochaine gare", on: notifyTarget == "nextStop")
                     }
+                }
+
+                Button {
+                    notifyPlatform.toggle()
+                    store.onSettingsChanged()
+                } label: {
+                    checkLabel("Notifier un changement de voie", on: notifyPlatform)
                 }
             } else {
                 Text("Aucun réglage pour ce réseau")

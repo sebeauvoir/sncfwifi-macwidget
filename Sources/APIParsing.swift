@@ -16,16 +16,31 @@ enum APIBody {
         return try? JSONSerialization.jsonObject(with: body) as? [String: Any]
     }
 
+    /// Variante tableau : `/bap/api/products` du portail ICE renvoie un tableau racine.
+    static func array(from data: Data) -> [[String: Any]]? {
+        try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+    }
+
+    static func fetchArray(url: URL,
+                           timeout: TimeInterval,
+                           completion: @escaping ([[String: Any]]?) -> Void) {
+        request(url: url, timeout: timeout) { completion($0.flatMap(array(from:))) }
+    }
+
     /// Requête GET + décodage, sur la file par défaut d'URLSession.
     static func fetch(url: URL,
                       timeout: TimeInterval,
                       completion: @escaping ([String: Any]?) -> Void) {
+        request(url: url, timeout: timeout) { completion($0.flatMap(object(from:))) }
+    }
+
+    private static func request(url: URL,
+                                timeout: TimeInterval,
+                                completion: @escaping (Data?) -> Void) {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.setValue("sncfwifi-macapp/1.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            completion(data.flatMap(object(from:)))
-        }.resume()
+        URLSession.shared.dataTask(with: request) { data, _, _ in completion(data) }.resume()
     }
 }
 

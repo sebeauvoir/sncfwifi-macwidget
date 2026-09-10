@@ -26,6 +26,14 @@ final class MenuBarController: NSObject {
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
     private var refreshToken = 0
 
+    /// Échecs d'API consécutifs. À bord, la connexion se dégrade régulièrement (l'API ICE
+    /// annonce même ses propres coupures) : un seul échec ne doit pas faire clignoter le widget.
+    private var consecutiveFailures = 0
+    private let failuresBeforeDisconnect = 2
+
+    /// Source du dernier cycle réussi, pour charger la carte sans re-sonder.
+    private var activeSource: TrainDataSource?
+
     /// Fournisseur retenu au dernier cycle réussi. Sert quand le SSID est illisible
     /// (autorisation Localisation refusée) : évite de re-sonder tous les réseaux à chaque fois.
     private var detectedProvider: TrainDataSource?
@@ -42,6 +50,8 @@ final class MenuBarController: NSObject {
     private let notifyBeforeArrivalMinutesKey = "notifyBeforeArrivalMinutes"
     private let notifyBeforeArrivalTargetKey = "notifyBeforeArrivalTarget"
     private let lastArrivalNotificationStopIdKey = "lastArrivalNotificationStopId"
+    private let notifyPlatformChangeEnabledKey = "notifyPlatformChangeEnabled"
+    private let lastPlatformNotificationKey = "lastPlatformNotification"
     private let allowedNotificationLeadTimes = [5, 10, 15]
 
     private enum ArrivalNotificationTarget: String {
@@ -112,6 +122,12 @@ final class MenuBarController: NSObject {
         store.onOpenDemoPanel = { [weak self] in self?.openDemoControlPanel() }
         store.onCopyJSON = { [weak self] in self?.copyDebugData() }
         store.onOpenAbout = { [weak self] in self?.openAbout() }
+        store.onOpenMenu = { [weak self] in self?.openOnboardMenu() }
+        store.onCloseMenu = { [weak self] in
+            guard let self else { return }
+            self.store.route = .main
+            self.sizePopoverToContent()
+        }
         store.onSettingsChanged = { [weak self] in
             self?.lastArrivalNotifiedStopId = nil
             self?.refresh()
@@ -262,6 +278,8 @@ final class MenuBarController: NSObject {
     /// Oublie le fournisseur détecté après un échec d'API, pour re-sonder au prochain cycle.
     private func forgetDetectedProvider() {
         detectedProvider = nil
+        activeSource = nil
+        consecutiveFailures = 0
         providerBySSID.removeAll()
     }
 
@@ -269,6 +287,8 @@ final class MenuBarController: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.badge = nil
+            self.store.route = .main
+            self.store.menu = .idle
             self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
             self.statusItem.button?.imagePosition = .imageLeft
             self.statusItem.button?.title = ""
@@ -284,15 +304,22 @@ final class MenuBarController: NSObject {
 
             guard let snapshot else {
                 self.lastRawData = self.debugSnapshot(provider: source.descriptor, payloads: [:])
+                self.consecutiveFailures += 1
+                // On conserve l'état affiché le temps d'un second échec : sur un réseau
+                // embarqué instable, une requête ratée n'est pas une déconnexion.
+                guard self.consecutiveFailures >= self.failuresBeforeDisconnect else { return }
                 self.forgetDetectedProvider()
                 self.showNotConnected()
                 return
             }
 
+            self.consecutiveFailures = 0
+            self.activeSource = source
             self.lastRawData = self.debugSnapshot(provider: source.descriptor, payloads: snapshot.rawPayloads)
             if let notification = self.notifyBeforeArrivalIfNeeded(snapshot: snapshot) {
                 self.lastRawData?["notification"] = notification
             }
+            self.notifyPlatformChangeIfNeeded(snapshot: snapshot)
 
             self.badge = snapshot.badge
             self.redrawTitle()
@@ -315,6 +342,31 @@ final class MenuBarController: NSObject {
         }
         for (key, value) in payloads { data[key] = value }
         return data
+    }
+
+    // MARK: - Carte du bar-restaurant
+
+    /// Ouvre le second écran du popover et déclenche le chargement — jamais dans le cycle de
+    /// rafraîchissement : la carte pèse ~90 Ko et ne bouge pas d'une minute à l'autre.
+    private func openOnboardMenu() {
+        store.route = .menu
+        sizePopoverToContent()
+
+        guard let source = activeSource,
+              source.descriptor.features.contains(.onboardMenu)
+        else {
+            store.menu = .unavailable
+            return
+        }
+
+        if case .loaded = store.menu { return }
+
+        store.menu = .loading
+        source.fetchMenu { [weak self] menu in
+            guard let self else { return }
+            self.store.menu = menu.map { MenuState.loaded($0) } ?? .unavailable
+            self.sizePopoverToContent()
+        }
     }
 
     // MARK: - Notifications avant arrivée
@@ -343,6 +395,36 @@ final class MenuBarController: NSObject {
             "leadTime": beforeArrivalNotificationLeadTime,
             "isStoppedAtStation": journey.isStoppedAtStation
         ]
+    }
+
+    /// Notifie un changement de voie sur la gare d'arrivée choisie. Générique : ne dépend que
+    /// de la présence d'une voie réelle différente de la voie prévue.
+    private func notifyPlatformChangeIfNeeded(snapshot: TrainSnapshot) {
+        guard isPlatformChangeNotificationEnabled,
+              let journey = snapshot.journey,
+              journey.selectedArrivalIndex >= journey.nextStopIndex,
+              snapshot.viewState.stops.indices.contains(journey.selectedArrivalIndex)
+        else { return }
+
+        let stop = snapshot.viewState.stops[journey.selectedArrivalIndex]
+        guard stop.platformChanged,
+              let platform = stop.platform,
+              let scheduled = stop.scheduledPlatform
+        else { return }
+
+        // La clé porte la voie : un second changement sur le même arrêt notifie à nouveau.
+        let key = "\(stop.id)-\(platform)"
+        guard lastPlatformNotification != key else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Changement de voie"
+        content.body = "\(stop.label) : voie \(platform) au lieu de \(scheduled)."
+        content.sound = .default
+        notificationCenter.add(UNNotificationRequest(identifier: "platform-\(key)",
+                                                     content: content,
+                                                     trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false))) { _ in }
+
+        lastPlatformNotification = key
     }
 
     private func notificationTargetStop(stops: [StopRow], journey: JourneyContext) -> StopRow? {
@@ -406,6 +488,15 @@ final class MenuBarController: NSObject {
         set { UserDefaults.standard.set(newValue, forKey: lastArrivalNotificationStopIdKey) }
     }
 
+    private var isPlatformChangeNotificationEnabled: Bool {
+        UserDefaults.standard.bool(forKey: notifyPlatformChangeEnabledKey)
+    }
+
+    private var lastPlatformNotification: String? {
+        get { UserDefaults.standard.string(forKey: lastPlatformNotificationKey) }
+        set { UserDefaults.standard.set(newValue, forKey: lastPlatformNotificationKey) }
+    }
+
     private var arrivalNotificationTarget: ArrivalNotificationTarget {
         guard let raw = UserDefaults.standard.string(forKey: notifyBeforeArrivalTargetKey),
               let target = ArrivalNotificationTarget(rawValue: raw)
@@ -417,7 +508,8 @@ final class MenuBarController: NSObject {
         UserDefaults.standard.register(defaults: [
             notifyBeforeArrivalEnabledKey: true,
             notifyBeforeArrivalMinutesKey: 10,
-            notifyBeforeArrivalTargetKey: ArrivalNotificationTarget.selectedArrival.rawValue
+            notifyBeforeArrivalTargetKey: ArrivalNotificationTarget.selectedArrival.rawValue,
+            notifyPlatformChangeEnabledKey: true
         ])
     }
 
