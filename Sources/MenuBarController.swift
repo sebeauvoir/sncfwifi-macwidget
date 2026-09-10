@@ -42,6 +42,10 @@ final class MenuBarController: NSObject {
     /// le portail d'un train peut n'être joignable qu'au bout de quelques minutes à bord.
     private var nonTrainSSIDs: [String: Date] = [:]
     private let nonTrainProbeCooldown: TimeInterval = 300
+    /// Sondes ratées par SSID. Une seule ne suffit pas à mettre un réseau en quarantaine : sur
+    /// un train dont l'API tombe par intermittence, ça condamnerait le SSID pour 5 minutes.
+    private var failedProbes: [String: Int] = [:]
+    private let failedProbesBeforeCooldown = 2
 
     private let locationManager = CLLocationManager()
     private let notificationCenter = UNUserNotificationCenter.current()
@@ -214,17 +218,26 @@ final class MenuBarController: NSObject {
             if let probedAt = nonTrainSSIDs[ssid],
                Date().timeIntervalSince(probedAt) < nonTrainProbeCooldown {
                 detectedProvider = nil
+                recordDiagnostics(reason: "ssid_in_cooldown")
                 showNotConnected()
                 return
             }
             probeProviders { [weak self] source in
                 guard let self, self.isCurrent(token) else { return }
                 guard let source else {
-                    self.nonTrainSSIDs[ssid] = Date()
+                    let failures = (self.failedProbes[ssid] ?? 0) + 1
+                    self.failedProbes[ssid] = failures
+                    if failures >= self.failedProbesBeforeCooldown {
+                        self.nonTrainSSIDs[ssid] = Date()
+                    }
                     self.detectedProvider = nil
+                    self.recordDiagnostics(reason: failures >= self.failedProbesBeforeCooldown
+                                           ? "probe_failed_cooldown"
+                                           : "probe_failed_retry")
                     self.showNotConnected()
                     return
                 }
+                self.failedProbes[ssid] = 0
                 self.providerBySSID[ssid] = source
                 self.detectedProvider = source
                 self.fetchAndPublish(from: source, token: token)
@@ -240,6 +253,7 @@ final class MenuBarController: NSObject {
         probeProviders { [weak self] source in
             guard let self, self.isCurrent(token) else { return }
             guard let source else {
+                self.recordDiagnostics(reason: "probe_failed_no_ssid")
                 self.showNotConnected()
                 return
             }
@@ -248,31 +262,61 @@ final class MenuBarController: NSObject {
         }
     }
 
+    /// Renseigne le dump « Copier le JSON » sur les chemins qui n'atteignent aucune API : sans
+    /// ça, le diagnostic est vide précisément quand le widget affiche « non connecté ».
+    private func recordDiagnostics(reason: String) {
+        let ssidInfo = currentSSIDInfo()
+        lastRawData = [
+            "reason": reason,
+            "ssid": ssidInfo.ssid,
+            "ssidStatus": ssidInfo.status,
+            "demoMode": MockTrainData.shared.isEnabled,
+            "knownSSIDs": TrainProviders.all.flatMap { Array($0.descriptor.ssids) },
+            "failedProbes": failedProbes,
+            "ssidCooldowns": nonTrainSSIDs.mapValues { ISO8601DateFormatter().string(from: $0) },
+            "apiHostOnboard": TrainProviders.hostChecks,
+            "consecutiveFailures": consecutiveFailures
+        ]
+    }
+
     private func isCurrent(_ token: Int) -> Bool {
         token == refreshToken
     }
 
-    /// Sonde tous les réseaux en parallèle. Aucun n'est privilégié : l'ordre de
-    /// `TrainProviders.all` ne sert qu'à départager si plusieurs répondent.
+    /// Sonde tous les réseaux en parallèle et rend **le premier qui répond**, sans attendre les
+    /// autres : un hôte qui résout mais ne répond pas retient sinon la détection jusqu'à son
+    /// timeout (5 s observées à bord d'un ICE, où `ombord.info` pointe sur la passerelle).
+    /// Aucun réseau n'est privilégié — l'ordre du registre ne sert qu'en cas d'égalité stricte.
     private func probeProviders(completion: @escaping (TrainDataSource?) -> Void) {
         let sources = TrainProviders.all
         let group = DispatchGroup()
         let syncQueue = DispatchQueue(label: "fr.sncf.wifi-widget.probe")
-        var onboardIds: Set<String> = []
+        var winner: TrainDataSource?
+        var finished = false
+
+        let finish: (TrainDataSource?) -> Void = { source in
+            var shouldCall = false
+            syncQueue.sync {
+                if !finished {
+                    finished = true
+                    winner = source
+                    shouldCall = true
+                }
+            }
+            guard shouldCall else { return }
+            DispatchQueue.main.async { completion(winner) }
+        }
 
         for source in sources {
             group.enter()
             source.probeOnboard { onboard in
-                if onboard {
-                    syncQueue.sync { _ = onboardIds.insert(source.descriptor.id) }
-                }
+                if onboard { finish(source) }
                 group.leave()
             }
         }
 
-        group.notify(queue: .main) {
-            completion(sources.first { onboardIds.contains($0.descriptor.id) })
-        }
+        // Toutes les sondes ont échoué.
+        group.notify(queue: .main) { finish(nil) }
     }
 
     /// Oublie le fournisseur détecté après un échec d'API, pour re-sonder au prochain cycle.
