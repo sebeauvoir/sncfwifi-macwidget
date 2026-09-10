@@ -8,8 +8,8 @@ Un widget pour la barre de menus macOS qui exploite l'API du portail WiFi de vot
 afficher en temps réel les informations de votre trajet : gare suivante, vitesse, retard,
 données mobiles, etc.
 
-Deux réseaux embarqués sont pris en charge — **WiFi SNCF** et **WiFi Eurostar** (transmanche et
-continental) — et détectés automatiquement. Chaque réseau expose des données différentes : le tableau de la section
+Trois réseaux embarqués sont pris en charge — **WiFi SNCF**, **WiFi Eurostar** (transmanche et
+continental) et **WIFIonICE** (Deutsche Bahn) — et détectés automatiquement. Chaque réseau expose des données différentes : le tableau de la section
 [Réseaux pris en charge](#réseaux-wifi-pris-en-charge-) dit exactement ce que vous verrez dans
 chaque train.
 
@@ -17,15 +17,19 @@ chaque train.
 
 ## Réseaux WiFi pris en charge 🚆
 
-| Réseau | Trains | API | Desserte · retard · ETA | Vitesse | Position · cap | Opérateurs mobiles | Données | Qualité WiFi |
-|---|---|---|---|---|---|---|---|---|
-| **WiFi SNCF** | TGV INOUI, Intercités, Lyria | `wifi.sncf` | ✅ | ✅ | interne¹ | ❌ | ✅ | ✅ |
-| **WiFi Eurostar** | Eurostar transmanche (Londres ↔ Paris / Bruxelles / Amsterdam) et Eurostar continental (ex-Thalys) | `ombord.info` (Icomera) | ❌² | ✅ | ✅ | ✅ | ✅ | ❌³ |
+| Réseau | Trains | API | Desserte · retard · ETA | Voie | Vitesse | Position | Opérateurs | Données | Connectivité | Carte du bar |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **WiFi SNCF** | TGV INOUI, Intercités, Lyria | `wifi.sncf` | ✅ | ❌ | ✅ | interne¹ | ❌ | ✅ | ✅ (0…5) | ❌⁴ |
+| **WiFi Eurostar** | Eurostar transmanche (Londres ↔ Paris / Bruxelles / Amsterdam) et Eurostar continental (ex-Thalys) | `ombord.info` (Icomera) | ❌² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ (lien montant³) | ❌ |
+| **WIFIonICE** | ICE (Deutsche Bahn) | `iceportal.de` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌⁵ | ✅ **+ prévision** | ✅ |
 
 <sub>¹ La position GPS sert à détecter l'arrêt en gare, elle n'est pas affichée. ·
 ² L'API du portail n'expose aucune donnée de trajet, voir ci-dessous. ·
 ³ Le RSSI disponible est celui des modems 4G du toit, pas du WiFi de la voiture : il est affiché
-comme « lien montant » plutôt que déguisé en qualité WiFi.</sub>
+comme « lien montant » plutôt que déguisé en qualité WiFi. ·
+⁴ L'endpoint `bar/attendance` est lu et présent dans le JSON de debug, mais sa sémantique reste à
+confirmer. ·
+⁵ Le WiFi des ICE est sans quota : l'API n'expose aucun compteur.</sub>
 
 ### 🇫🇷 WiFi SNCF — TGV INOUI, Intercités, Lyria
 
@@ -94,6 +98,49 @@ embarquée, pas du widget — si elle s'avère provisionnée sur d'autres rames,
 > Ces réponses sont du **JSONP même sans paramètre `callback`** (`({ … });`) : le corps est
 > décapsulé avant d'être décodé.
 
+### 🇩🇪 WIFIonICE — ICE (Deutsche Bahn)
+
+SSID reconnu : `WIFIonICE`
+
+<p align="center">
+  <img src="img/ice-panel.png" width="38%" />
+  &nbsp;&nbsp;
+  <img src="img/ice-menu.png" width="38%" />
+</p>
+<p align="center">
+  <img src="img/ice-menubar.png" width="26%" />
+</p>
+
+C'est l'API la plus riche des trois. Ce que le widget affiche :
+
+- **Pastille** : gare d'arrivée et temps restant (`Berlin · 3h18`) avec jauge de progression,
+  calculée sur les **distances réelles** et non estimée à partir des horaires ;
+- **Desserte** avec, pour chaque arrêt, l'heure prévue barrée en cas de retard **et la voie** —
+  seul réseau à la donner. Un changement de voie s'affiche voie ~~3/4~~ **5/6** et déclenche une
+  **notification système** quand il concerne votre gare d'arrivée ;
+- **Connectivité avec prévision** : « Internet instable · signal faible prévu dans 20 min ».
+  Aucun autre réseau n'annonce la dégradation à venir ;
+- **Distance restante**, **vitesse moyenne** depuis le départ et identité de la rame
+  (`ICE 1 · rame ICE0167 · 2e classe`) ;
+- **Carte du bar-restaurant** dans un panneau dédié, ouvert par l'icône couverts du pied de
+  page : catégories, prix en euros et articles épuisés. Elle n'est chargée qu'à l'ouverture de ce
+  panneau, jamais à chaque cycle.
+
+Ce que l'API ne donne pas : la **cause** du retard (seulement sa durée), aucun **quota de
+données**, et la carte **en allemand uniquement** — vérifié via l'en-tête `Accept-Language`, les
+paramètres d'URL et le bundle du portail : le sélecteur de langue traduit les libellés du site,
+pas le catalogue.
+
+| Endpoint | Contenu utilisé |
+|---|---|
+| `GET https://iceportal.de/api1/rs/status` | vitesse (**en km/h**, contrairement aux deux autres réseaux), position, `vzn` (n° de train), `tzn` (rame), `series` (modèle), classe, `connectivity` (état courant **et** prévision) |
+| `GET https://iceportal.de/api1/rs/tripInfo/trip` | arrêts, horaires prévus et réels, retards, **voie prévue et réelle**, distances (`actualPosition`, `distanceFromLastStop`, `totalDistance`) |
+| `GET https://iceportal.de/bap/api/bap-service-status` | service de commande actif ou non — conditionne l'icône couverts |
+| `GET https://iceportal.de/bap/api/products` | carte du bar-restaurant : catégories, prix (EUR/CHF), disponibilité |
+
+> ⚠️ `actualPosition` n'est **pas** la position du train mais la distance du dernier arrêt passé.
+> La position réelle vaut `actualPosition + distanceFromLastStop`.
+
 ### Comment le réseau est détecté
 
 1. Le **SSID** est comparé aux listes ci-dessus : si ça correspond, l'API du réseau est appelée
@@ -149,7 +196,7 @@ brew reinstall --cask sncfwifi
 ## Prérequis ⚙️
 
 - macOS 11 (Big Sur) ou plus récent — Apple Silicon et Intel (binaire universel)
-- Connexion au WiFi d'un train pris en charge pour que l'API réponde
+- Connexion au WiFi d'un train pris en charge (SNCF, Eurostar ou ICE) pour que l'API réponde
 - *(pour compiler)* Xcode Command Line Tools (`xcode-select --install`)
 
 ---
@@ -195,7 +242,14 @@ final class MonReseauDataSource: TrainDataSource {
         //   MetricRow(id: "position", symbol: "location.fill", text: "…")
         // Déclarez .journey et remplissez stops + JourneyContext pour obtenir
         // la timeline, l'ETA et les notifications d'arrivée sans code en plus.
+        // Renseignez StopRow.platform / .scheduledPlatform et la voie s'affiche
+        // dans la timeline, avec notification si elle change.
     }
+
+    // Facultatif : déclarez .onboardMenu et implémentez fetchMenu pour obtenir
+    // le panneau restaurant et son icône dans le pied de page. Sans cela, la
+    // valeur par défaut du protocole répond « pas de carte ».
+    func fetchMenu(completion: @escaping (OnboardMenu?) -> Void) { … }
 }
 ```
 
@@ -234,7 +288,8 @@ et données côté SNCF, ainsi que le système, les modems, les opérateurs et l
 ## À intégrer plus tard 📋
 
 - **Serveur démo piloté par scénarios** : un dossier JSON par réseau, pour ne plus toucher au
-  Python à chaque ajout de réseau.
+  Python à chaque ajout de réseau. Le serveur rejoue aujourd'hui SNCF et Icomera, **pas encore
+  ICE** — le chemin ICE se teste donc à bord.
 - **Affluence au bar** : l'endpoint SNCF est lu mais la sémantique de `attendance` reste à
   confirmer avant de l'afficher.
 - **Position en mode SNCF** : les coordonnées sont déjà là, elles pourraient alimenter les mêmes
@@ -244,8 +299,8 @@ et données côté SNCF, ainsi que le système, les modems, les opérateurs et l
   et les notifications s'activent en déclarant `.journey` sur le descripteur.
 - **Contrôle d'hôte privé pour SNCF** : à bord d'un TGV, vérifier `dig +short wifi.sncf` puis
   activer `requiresPrivateAPIHost` sur le descripteur SNCF.
-- **Réseaux repérés, non pris en charge** : WifiOnICE (`iceportal.de`), Trenitalia
-  (`portalefrecce.it`), NS, Renfe, TER / Ouigo.
+- **Réseaux repérés, non pris en charge** : Trenitalia (`portalefrecce.it`), NS, Renfe,
+  TER / Ouigo.
 
 ---
 
