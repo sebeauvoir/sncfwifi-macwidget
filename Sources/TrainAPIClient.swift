@@ -69,13 +69,6 @@ final class TrainAPIClient {
     }
 
     private func fetch(url: URL, completion: @escaping ([String: Any]?) -> Void) {
-        var req = URLRequest(url: url, timeoutInterval: timeout)
-        req.setValue("sncfwifi-macapp/1.0", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            guard let data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { completion(nil); return }
-            completion(json)
-        }.resume()
+        APIBody.fetch(url: url, timeout: timeout, completion: completion)
     }
 }

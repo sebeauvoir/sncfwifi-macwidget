@@ -128,6 +128,24 @@ Hors d'un réseau connu, le widget ne fait aucun appel : c'est autant de batteri
 
 ---
 
+## Installation via Homebrew 🍺
+
+```bash
+brew tap antvgr/sncfwifi https://github.com/antvgr/sncfwifi-macwidget
+brew install --cask sncfwifi
+```
+
+Mise à jour vers la dernière version :
+
+```bash
+brew reinstall --cask sncfwifi
+```
+
+> L'app étant signée en ad-hoc, si macOS la bloque au premier lancement :
+> `xattr -dr com.apple.quarantine /Applications/SNCFWifi.app` (ou clic droit → **Ouvrir**).
+
+---
+
 ## Prérequis ⚙️
 
 - macOS 11 (Big Sur) ou plus récent — Apple Silicon et Intel (binaire universel)
@@ -194,7 +212,9 @@ payloads bruts reçus. Sans être à bord, un petit binaire de sonde suffit :
 
 ## Mode Démo via serveur local 🧪
 
-Permet de simuler un trajet **SNCF** sans être dans le train.
+Permet de simuler un trajet sans être dans le train, **sur les deux réseaux** : le serveur sert
+les endpoints SNCF et les endpoints Icomera en parallèle, et **Debug → Réseau simulé** choisit
+lequel l'app interroge.
 
 1. Lancer le serveur :
    ```bash
@@ -207,16 +227,14 @@ Permet de simuler un trajet **SNCF** sans être dans le train.
 3. Activer **Debug → Mode Démo** dans l'app.
 
 Le panneau HTML fait varier vitesse, retard et cause, index d'arrêt, arrêt en gare, qualité WiFi
-et données. Il rejoue les 5 endpoints `wifi.sncf` consommés par l'app.
+et données côté SNCF, ainsi que le système, les modems, les opérateurs et le quota côté Eurostar.
 
 ---
 
 ## À intégrer plus tard 📋
 
-- **Serveur démo multi-réseaux** : étendre `scripts/demo_server.py` aux 5 routes Icomera et rendre
-  l'URL de base configurable par réseau dans `MockTrainData`, pour développer un réseau Eurostar
-  sans être à bord. Piste plus ambitieuse : un serveur piloté par des scénarios JSON, un dossier
-  par réseau, pour ne plus toucher au Python à chaque ajout.
+- **Serveur démo piloté par scénarios** : un dossier JSON par réseau, pour ne plus toucher au
+  Python à chaque ajout de réseau.
 - **Affluence au bar** : l'endpoint SNCF est lu mais la sémantique de `attendance` reste à
   confirmer avant de l'afficher.
 - **Position en mode SNCF** : les coordonnées sont déjà là, elles pourraient alimenter les mêmes
@@ -228,6 +246,16 @@ et données. Il rejoue les 5 endpoints `wifi.sncf` consommés par l'app.
   activer `requiresPrivateAPIHost` sur le descripteur SNCF.
 - **Réseaux repérés, non pris en charge** : WifiOnICE (`iceportal.de`), Trenitalia
   (`portalefrecce.it`), NS, Renfe, TER / Ouigo.
+
+---
+
+## Logos des compagnies 🎨
+
+L'en-tête du panneau affiche le logo de la compagnie à la place de l'icône générique quand le
+fichier est présent : déposez `logo-sncf.png` ou `logo-eurostar.png` dans `Resources/Logos/`
+(conventions et variantes `@2x` / mode sombre détaillées dans
+[`Resources/Logos/README.md`](Resources/Logos/README.md)). Les logos étant des marques déposées,
+le dépôt n'en embarque aucun : leur absence est un cas normal.
 
 ---
 

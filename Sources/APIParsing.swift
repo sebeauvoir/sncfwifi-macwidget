@@ -2,6 +2,33 @@ import Foundation
 
 /// Conversions tolérantes : les APIs embarquées renvoient leurs nombres tantôt en JSON,
 /// tantôt en chaînes (`"speed":"81.22"` chez Icomera).
+/// Décode un corps de réponse en objet JSON, y compris quand il est enveloppé en JSONP
+/// (`({ … });`) : la plateforme Icomera répond ainsi même sans paramètre `callback`.
+enum APIBody {
+    static func object(from data: Data) -> [String: Any]? {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return json }
+        guard let text = String(data: data, encoding: .utf8),
+              let start = text.firstIndex(of: "{"),
+              let end = text.lastIndex(of: "}"),
+              start < end
+        else { return nil }
+        let body = Data(text[start...end].utf8)
+        return try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+    }
+
+    /// Requête GET + décodage, sur la file par défaut d'URLSession.
+    static func fetch(url: URL,
+                      timeout: TimeInterval,
+                      completion: @escaping ([String: Any]?) -> Void) {
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.setValue("sncfwifi-macapp/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            completion(data.flatMap(object(from:)))
+        }.resume()
+    }
+}
+
 enum APIValue {
     static func double(_ value: Any?) -> Double? {
         switch value {

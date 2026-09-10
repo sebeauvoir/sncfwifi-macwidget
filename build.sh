@@ -62,6 +62,15 @@ if [[ -f Resources/AppIcon.icns ]]; then
     cp Resources/AppIcon.icns "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
+# Logos des compagnies (facultatifs — cf. Resources/Logos/README.md). Copiés à plat : c'est à la
+# racine de Contents/Resources/ que NSImage(named:) les trouve et gère les suffixes @2x / @3x.
+# Le dossier peut être vide, d'où le test préalable qui évite un échec sous `set -e`.
+for logo_ext in png pdf; do
+    if compgen -G "Resources/Logos/*.${logo_ext}" > /dev/null; then
+        cp Resources/Logos/*."${logo_ext}" "${RESOURCES_DIR}/"
+    fi
+done
+
 # Signature ad-hoc : indispensable pour que TCC (Location Services) reconnaisse l'app
 # -s -          : signature ad-hoc (pas de certificat developer requis)
 # --deep        : signe aussi les frameworks/plugins embarqués

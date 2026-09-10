@@ -208,7 +208,7 @@ final class SNCFDataSource: TrainDataSource {
 
         var viewState = TrainViewState(
             provider: descriptor,
-            headerTitle: trainNumber.map { "\(descriptor.displayName) n° \($0)" } ?? descriptor.displayName,
+            trainNumber: trainNumber,
             headerSubtitle: destinationLabel.flatMap { $0.isEmpty ? nil : "→ \($0)" },
             delayMin: trainDelayMins,
             delayCause: trainDelayCause,

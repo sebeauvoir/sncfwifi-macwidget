@@ -104,6 +104,11 @@ final class MenuBarController: NSObject {
             self?.refresh()
         }
         store.onToggleDemo = { [weak self] in self?.toggleDemoMode() }
+        store.onSetDemoOperator = { [weak self] providerId in
+            MockTrainData.shared.demoProviderId = providerId
+            self?.forgetDetectedProvider()
+            self?.refresh()
+        }
         store.onOpenDemoPanel = { [weak self] in self?.openDemoControlPanel() }
         store.onCopyJSON = { [weak self] in self?.copyDebugData() }
         store.onOpenAbout = { [weak self] in self?.openAbout() }

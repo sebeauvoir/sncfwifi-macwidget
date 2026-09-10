@@ -34,7 +34,8 @@ final class EurostarDataSource: TrainDataSource {
     func makeSnapshot(_ snap: EurostarSnapshot) -> TrainSnapshot {
         var state = TrainViewState(
             provider: descriptor,
-            headerTitle: descriptor.displayName,
+            // La plateforme Icomera n'expose aucun numéro commercial, seulement la rame.
+            trainNumber: nil,
             headerSubtitle: snap.rameNumber.map { "Rame \($0)" } ?? snap.systemName,
             speedKmh: snap.speedKmh
         )
@@ -99,7 +100,16 @@ final class EurostarDataSource: TrainDataSource {
         if snap.dataLimitMB == nil, let used = snap.dataUsedMB {
             rows.append(MetricRow(id: "data",
                                   symbol: "arrow.up.arrow.down.circle",
-                                  text: String(format: "%.0f Mo utilisés", used)))
+                                  text: "\(DataVolume.label(used)) utilisés"))
+        }
+        if let mbps = snap.bandwidthDownMbps {
+            rows.append(MetricRow(id: "bandwidth",
+                                  symbol: "speedometer",
+                                  text: String(format: "Débit max %.0f Mbit/s", mbps),
+                                  span: .half))
+        }
+        if let text = EurostarDataSource.sessionLeftText(snap.sessionSecondsLeft) {
+            rows.append(MetricRow(id: "session", symbol: "hourglass", text: text, span: .half))
         }
 
         var footnote = "Desserte et horaires non fournis par le WiFi Eurostar."
@@ -110,6 +120,16 @@ final class EurostarDataSource: TrainDataSource {
         rows.append(.footnote(footnote))
 
         return rows
+    }
+
+    /// « Reste 1 h 20 » / « Reste 45 min ». `nil` quand la plateforme n'impose aucune durée.
+    private static func sessionLeftText(_ seconds: Int?) -> String? {
+        guard let seconds, seconds > 0 else { return nil }
+        let minutes = seconds / 60
+        guard minutes >= 60 else { return "Reste \(max(1, minutes)) min" }
+        let hours = minutes / 60
+        let rest = minutes % 60
+        return rest > 0 ? "Reste \(hours) h \(rest)" : "Reste \(hours) h"
     }
 
     /// « 4G · 5/5 liens · -35 dBm », ou « Hors ligne » si le routeur n'a plus de lien montant.

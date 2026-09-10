@@ -51,8 +51,10 @@ struct MetricRow: Identifiable {
 struct TrainViewState {
     let provider: TrainProviderDescriptor
 
-    /// Libellés composés par la source, pour que les vues n'aient rien à savoir du réseau.
-    var headerTitle: String
+    /// Numéro commercial du train, quand le réseau l'expose. L'en-tête compose lui-même
+    /// « TGV INOUI n° 6201 » ou « n° 6201 » selon qu'un logo de compagnie est présent.
+    var trainNumber: String?
+    /// Destination (SNCF) ou identifiant de rame (Eurostar), déjà mis en forme par la source.
     var headerSubtitle: String?
 
     var delayMin: Int = 0
@@ -77,6 +79,30 @@ struct TrainViewState {
 
     var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
+
+}
+
+/// Mise en forme des volumes de données, partagée entre le panneau et la barre des menus.
+///
+/// Les deux plateformes n'ont pas les mêmes ordres de grandeur de quota (quelques dizaines de Mo
+/// côté SNCF, 1 Go côté Eurostar), d'où la bascule automatique d'unité. Le séparateur décimal
+/// suit la locale : virgule en français.
+enum DataVolume {
+    /// "16,9 Mo", "1,0 Go" — bascule en Go au-delà de 1000 Mo.
+    static func label(_ megabytes: Double) -> String {
+        if megabytes >= 1000 {
+            return String(format: "%.1f Go", locale: .current, megabytes / 1000)
+        }
+        return String(format: "%.1f Mo", locale: .current, megabytes)
+    }
+
+    /// Variante compacte pour la barre des menus : pas de décimale en Mo ("983 Mo", "1,4 Go").
+    static func compactLabel(_ megabytes: Double) -> String {
+        if megabytes >= 1000 {
+            return String(format: "%.1f Go", locale: .current, megabytes / 1000)
+        }
+        return String(format: "%.0f Mo", locale: .current, megabytes)
+    }
 }
 
 enum PanelState {
@@ -98,6 +124,9 @@ final class TrainStore: ObservableObject {
     var onQuit: () -> Void = {}
     var onSelectArrival: (String) -> Void = { _ in }
     var onToggleDemo: () -> Void = {}
+    /// Change le réseau simulé en mode démo (le serveur local sert les deux plateformes),
+    /// désigné par l'identifiant de son descripteur.
+    var onSetDemoOperator: (String) -> Void = { _ in }
     var onOpenDemoPanel: () -> Void = {}
     var onCopyJSON: () -> Void = {}
     var onOpenAbout: () -> Void = {}

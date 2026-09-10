@@ -128,9 +128,10 @@ enum TrainProviders {
         all.first { $0.descriptor.id == id }
     }
 
-    /// Réseau rejoué par le serveur démo (voir `scripts/demo_server.py`).
+    /// Réseau rejoué par le serveur démo (voir `scripts/demo_server.py`), choisi dans
+    /// **Debug → Réseau simulé** : le serveur sert les deux plateformes en parallèle.
     static var demoSource: TrainDataSource? {
-        source(id: "sncf")
+        source(id: MockTrainData.shared.demoProviderId) ?? all.first
     }
 
     /// Tous les SSID reconnus, pour l'écran « non connecté ».

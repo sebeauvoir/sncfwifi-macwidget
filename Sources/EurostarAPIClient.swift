@@ -12,6 +12,10 @@ struct EurostarSnapshot {
 
     var dataUsedMB: Double?
     var dataLimitMB: Double?
+    /// Débit descendant maximal de la session, en Mbit/s.
+    var bandwidthDownMbps: Double?
+    /// Temps de session restant, en secondes. Absent quand l'accès est illimité.
+    var sessionSecondsLeft: Int?
 
     var devicesOnline: Int?
     var devicesTotal: Int?
@@ -52,6 +56,8 @@ struct EurostarSnapshot {
         guard let tech = uplinkTechnology?.lowercased(), !tech.isEmpty else { return nil }
         switch tech {
         case "nr", "5g", "5gnr":              return "5G"
+        // ENDC = LTE + NR en double connectivité, soit de la 5G non-standalone.
+        case "endc", "lte-nr", "nsa":         return "5G"
         case "lte", "lte-a", "4g":            return "4G"
         case "hsdpa", "hsupa", "hspa", "hspa+": return "3G+"
         case "umts", "3g", "wcdma":           return "3G"
@@ -83,6 +89,10 @@ final class EurostarAPIClient {
 
     /// Sonde légère : un seul appel, pour savoir si on est à bord d'un Eurostar.
     func probe(completion: @escaping (Bool) -> Void) {
+        if MockTrainData.shared.isEnabled {
+            completion(true)
+            return
+        }
         fetch(url: positionURL) { json in
             completion(json?["latitude"] != nil)
         }
@@ -90,6 +100,17 @@ final class EurostarAPIClient {
 
     /// `nil` si aucune position n'a pu être lue : API absente ou hors du train.
     func fetchAll(completion: @escaping (EurostarSnapshot?) -> Void) {
+        if MockTrainData.shared.isEnabled {
+            MockTrainData.shared.fetchAllEurostar { system, connectivity, users, user, position in
+                completion(EurostarAPIClient.makeSnapshot(position: position,
+                                                          user: user,
+                                                          users: users,
+                                                          connectivity: connectivity,
+                                                          system: system))
+            }
+            return
+        }
+
         let group = DispatchGroup()
 
         var position: [String: Any]?
@@ -146,6 +167,13 @@ final class EurostarAPIClient {
             // Les compteurs sont en octets, et les limites sont des chaînes vides si illimité.
             if let used = num(u["data_total_used"]) { snap.dataUsedMB = used / 1_000_000.0 }
             if let limit = num(u["data_total_limit"]), limit > 0 { snap.dataLimitMB = limit / 1_000_000.0 }
+            // `bandwidth_download_limit` est en octets/s : 12 500 000 → 100 Mbit/s.
+            if let bytesPerSecond = num(u["bandwidth_download_limit"]), bytesPerSecond > 0 {
+                snap.bandwidthDownMbps = bytesPerSecond * 8 / 1_000_000.0
+            }
+            if let seconds = num(u["timeleft"]), seconds > 0 {
+                snap.sessionSecondsLeft = Int(seconds)
+            }
         }
 
         if let us = users {
@@ -203,23 +231,7 @@ final class EurostarAPIClient {
     }
 
     private func fetch(url: URL, completion: @escaping ([String: Any]?) -> Void) {
-        var req = URLRequest(url: url, timeoutInterval: timeout)
-        req.setValue("sncfwifi-macapp/1.0", forHTTPHeaderField: "User-Agent")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            completion(data.flatMap { EurostarAPIClient.parseJSONP($0) })
-        }.resume()
-    }
-
-    /// Décapsule `({ … });` (ou `callback({ … });`) puis décode le JSON.
-    static func parseJSONP(_ data: Data) -> [String: Any]? {
-        guard let text = String(data: data, encoding: .utf8),
-              let start = text.firstIndex(of: "{"),
-              let end = text.lastIndex(of: "}"),
-              start < end
-        else { return nil }
-        let body = String(text[start...end])
-        return (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any]
+        APIBody.fetch(url: url, timeout: timeout, completion: completion)
     }
 
     /// Réseaux traversés (FR, BE, NL, DE, UK). Un PLMN absent est affiché « MCC-MNC ».
@@ -246,9 +258,7 @@ final class EurostarAPIClient {
     static func operatorName(plmn: String) -> String {
         if let name = operatorNames[plmn] { return name }
         guard plmn.count > 3 else { return plmn }
-        let mcc = plmn.prefix(3)
-        let mnc = plmn.dropFirst(3)
-        return "\(mcc)-\(mnc)"
+        return "\(plmn.prefix(3))-\(plmn.dropFirst(3))"
     }
 
     private static func num(_ value: Any?) -> Double? {

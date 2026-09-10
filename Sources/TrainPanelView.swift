@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Combine
 
@@ -15,6 +16,14 @@ extension Color {
 extension TrainProviderDescriptor {
     /// Couleur d'accent du panneau. Portée par le descripteur : aucune vue ne connaît le réseau.
     var accent: Color { Color(hex: accentHex) }
+
+    /// Logo de marque déposé dans `Resources/Logos/` : `logo-<id>.png` (+ `@2x`), et
+    /// `logo-<id>-dark.png` pour une variante sombre facultative. Les logos étant des marques
+    /// déposées, leur absence est le cas normal : l'en-tête retombe sur l'icône générique.
+    func logo(dark: Bool) -> NSImage? {
+        if dark, let variant = NSImage(named: "logo-\(id)-dark") { return variant }
+        return NSImage(named: "logo-\(id)")
+    }
 }
 
 // MARK: - Vue racine
@@ -131,15 +140,44 @@ private struct ConnectedView: View {
 private struct HeaderView: View {
     let state: TrainViewState
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Hauteur de rendu du logo, calée sur celle de l'icône `tram.fill` qu'il remplace.
+    private let logoHeight: CGFloat = 20
+
+    private var logo: NSImage? {
+        state.provider.logo(dark: colorScheme == .dark)
+    }
+
+    /// Quand le logo porte déjà l'identité de la compagnie, seul le numéro de train subsiste —
+    /// et Eurostar n'en expose aucun, l'en-tête se réduit alors au logo.
+    private var title: String? {
+        let number = state.trainNumber.flatMap { $0.isEmpty ? nil : $0 }
+        guard logo == nil else { return number.map { "n° \($0)" } }
+        let name = state.provider.displayName
+        return number.map { "\(name) n° \($0)" } ?? name
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "tram.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(state.provider.accent)
+                if let logo = logo {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: logoHeight)
+                        // Le nom disparaît du texte : on le conserve pour VoiceOver.
+                        .accessibilityLabel(state.provider.displayName)
+                } else {
+                    Image(systemName: "tram.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(state.provider.accent)
+                }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(state.headerTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                    if let title = title {
+                        Text(title)
+                            .font(.system(size: 14, weight: .semibold))
+                    }
                     if let subtitle = state.headerSubtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(size: 12))
@@ -374,7 +412,7 @@ private struct DataView: View {
     }
 
     private func usageLine(consumed: Double, total: Double, reset: String?) -> String {
-        var text = String(format: "%.1f / %.1f Mo utilisés", consumed, total)
+        var text = "\(DataVolume.label(consumed)) / \(DataVolume.label(total)) utilisés"
         if let reset { text += " · reset \(reset)" }
         return text
     }
@@ -424,6 +462,7 @@ private struct FooterView: View {
     @AppStorage("notifyBeforeArrivalMinutes") private var notifyMinutes = 10
     @AppStorage("notifyBeforeArrivalTarget") private var notifyTarget = "selectedArrival"
     @AppStorage("isDemoMode") private var demoMode = false
+    @AppStorage("demoOperator") private var demoProvider = "sncf"
 
     private let leadTimes = [5, 10, 15]
 
@@ -524,6 +563,17 @@ private struct FooterView: View {
                 store.onToggleDemo()
             } label: {
                 checkLabel("Mode Démo (serveur local)", on: demoMode)
+            }
+            if demoMode {
+                Menu("Réseau simulé") {
+                    ForEach(TrainProviders.all, id: \.descriptor.id) { source in
+                        Button {
+                            store.onSetDemoOperator(source.descriptor.id)
+                        } label: {
+                            checkLabel(source.descriptor.displayName, on: source.descriptor.id == demoProvider)
+                        }
+                    }
+                }
             }
             Button("Ouvrir le panneau démo") { store.onOpenDemoPanel() }
             Divider()

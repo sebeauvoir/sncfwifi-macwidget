@@ -21,13 +21,13 @@
     <string>AppIcon</string>
 
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et économiser la batterie.</string>
+    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et Eurostar et économiser la batterie.</string>
 
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et économiser la batterie.</string>
+    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et Eurostar et économiser la batterie.</string>
 
     <key>NSLocationUsageDescription</key>
-    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et économiser la batterie.</string>
+    <string>Votre position est utilisée pour détecter automatiquement le réseau WiFi des trains SNCF et Eurostar et économiser la batterie.</string>
 
     <key>CFBundleVersion</key>
     <string>1</string>
@@ -45,13 +45,21 @@
     <key>LSUIElement</key>
     <true/>
 
-    <!-- Autorise les connexions HTTP non chiffrées vers wifi.sncf
-         (l'API du train est en HTTP sur le LAN du train) -->
+    <!-- Autorise les connexions HTTP non chiffrées vers les portails embarqués
+         (les API des trains sont servies en HTTP sur le LAN de la rame) :
+         wifi.sncf pour les TGV, ombord.info pour la plateforme Icomera d'Eurostar. -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSExceptionDomains</key>
         <dict>
             <key>wifi.sncf</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+            <key>ombord.info</key>
             <dict>
                 <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>
