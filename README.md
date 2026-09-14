@@ -8,10 +8,27 @@ Un widget pour la barre de menus macOS qui exploite l'API du portail WiFi de vot
 afficher en temps réel les informations de votre trajet : gare suivante, vitesse, retard,
 données mobiles, etc.
 
-Trois réseaux embarqués sont pris en charge — **WiFi SNCF**, **WiFi Eurostar** (transmanche et
-continental) et **WIFIonICE** (Deutsche Bahn) — et détectés automatiquement. Chaque réseau expose des données différentes : le tableau de la section
-[Réseaux pris en charge](#réseaux-wifi-pris-en-charge-) dit exactement ce que vous verrez dans
-chaque train.
+Trois réseaux embarqués sont pris en charge et détectés automatiquement — **WiFi SNCF**, **WiFi
+Eurostar** (transmanche et continental) et **WIFIonICE** (Deutsche Bahn). Ils n'exposent pas les
+mêmes données : le tableau des [réseaux pris en charge](#réseaux-wifi-pris-en-charge-) détaille ce
+qui est disponible dans chaque train.
+
+---
+
+## Le widget 🖥️
+
+**Pastille** — prochain arrêt et temps restant avec une jauge de progression (`Berlin · 3h18`), ou
+`En gare de Lyon` à l'arrêt. Le retard, quand le réseau le donne, s'y intercale 5 s
+(`⚠ +12min · Régulation du trafic`). Sans desserte, elle affiche la vitesse
+(`Eurostar · 278 km/h`) et n'a pas de jauge. Sa largeur est plafonnée, avec troncature, pour
+rester lisible quand la barre de menus est pleine.
+
+**Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
+horaires théoriques barrés en cas de retard ; puis les métriques propres au réseau. Un second
+écran affiche la carte du bar quand le réseau la publie.
+
+**Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
+système 5 / 10 / 15 min avant l'arrivée, notification de changement de voie.
 
 ---
 
@@ -39,16 +56,6 @@ SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
   <img src="img/sncf-panel.gif" width="55%" />
 </p>
 
-Ce que le widget affiche :
-
-- **Pastille** : prochaine gare et temps restant (`Milano · 3h42`) avec jauge de progression, ou
-  `En gare de Lyon` à l'arrêt ; le retard s'intercale 5 s (`⚠ +12min · Régulation du trafic`)
-- **Panneau** : numéro de train et destination, desserte complète avec heures théoriques barrées
-  en cas de retard, vitesse, qualité WiFi et nombre de passagers connectés, consommation de
-  données avec heure de remise à zéro
-- **Réglages** : choix de la gare d'arrivée (pour l'ETA et la progression) et notification
-  système 5 / 10 / 15 min avant l'arrivée
-
 | Endpoint | Contenu utilisé |
 |---|---|
 | `GET /router/api/train/gps` | vitesse (**en m/s**), latitude, longitude |
@@ -70,18 +77,11 @@ SSID reconnus : `EurostarWiFi`, `Eurostar WiFi`, `Eurostar`, `_EUROSTAR_WIFI`, `
   <img src="img/eurostar-menubar.png" width="30%" />
 </p>
 
-Ce que le widget affiche :
-
-- **Pastille** : `Eurostar · 278 km/h`, sans jauge — il n'y a pas de progression à calculer
-- **Panneau** : numéro de rame, vitesse, position GPS, altitude, cap cardinal, état des liens
-  montants (`4G · 5/5 liens · -28 dBm`), **opérateurs mobiles agrégés** (`Orange BE ×2 ·
-  Proximus ×2 · BASE`), appareils connectés, consommation de données
-
-**Pas de desserte, ni d'horaires, ni de retard sur ce réseau** : le portail expose bien une API
-PIS (`onboard.eurostar.com/services/pis/v1/journey`, `/route`, `/stations`, `/vehicle`), mais elle
-répond `{"error":"journey not found"}` là où elle a été testée. C'est une limite de l'API
-embarquée, pas du widget — si elle s'avère provisionnée sur d'autres rames, la desserte pourra
-être ajoutée sans rien changer d'autre (il suffit de déclarer `.journey` et de remplir `stops`).
+Ce portail n'expose **ni desserte, ni horaires, ni retard**. Une API PIS existe
+(`onboard.eurostar.com/services/pis/v1/journey`, `/route`, `/stations`, `/vehicle`) mais répond
+`{"error":"journey not found"}` là où elle a été testée : c'est une limite de l'API embarquée, pas
+du widget. Le panneau se limite donc à la position, la vitesse, l'altitude, le cap, l'état des
+liens montants et les opérateurs mobiles agrégés (`Orange BE ×2 · Proximus ×2 · BASE`).
 
 > Les relevés d'endpoints ci-dessous ont été faits sur une rame **continentale** (`eurostar-4342-2i`).
 > La flotte transmanche partageant le même portail Icomera, les mêmes endpoints s'appliquent ;
@@ -108,32 +108,26 @@ SSID reconnu : `WIFIonICE`
   <img src="img/ice-panel-bottom.png" width="38%" />
 </p>
 <p align="center">
-  <sub>En haut du panneau, la desserte donne la <b>voie de chaque arrêt</b> et signale les
-  changements (Berlin Hbf, voie <s>8</s> 7) ; en bas, la connectivité et sa prévision, la distance
-  restante, la vitesse moyenne et l'identité de la rame.</sub>
+  <sub>La desserte donne la <b>voie de chaque arrêt</b> et signale les changements (Berlin Hbf,
+  voie <s>8</s> 7) ; en bas du panneau, la connectivité et sa prévision, la distance restante, la
+  vitesse moyenne et l'identité de la rame.</sub>
 </p>
 <p align="center">
   <img src="img/ice-menubar.png" width="26%" />
 </p>
 
-C'est l'API la plus riche des trois. Ce que le widget affiche :
+Deux particularités de ce portail : la progression est calculée sur les **distances réelles**
+relevées par le train, et non estimée à partir des horaires ; et la connectivité est annoncée avec
+une **prévision** (« Internet instable · signal faible prévu dans 20 min »). Un changement de voie
+sur la gare d'arrivée déclenche une notification système.
 
-- **Pastille** : gare d'arrivée et temps restant (`Berlin · 3h18`) avec jauge de progression,
-  calculée sur les **distances réelles** et non estimée à partir des horaires ;
-- **Desserte** avec, pour chaque arrêt, l'heure prévue barrée en cas de retard **et la voie** —
-  seul réseau à la donner. Un changement de voie s'affiche voie ~~3/4~~ **5/6** et déclenche une
-  **notification système** quand il concerne votre gare d'arrivée ;
-- **Connectivité avec prévision** : « Internet instable · signal faible prévu dans 20 min ».
-  Aucun autre réseau n'annonce la dégradation à venir ;
-- **Distance restante**, **vitesse moyenne** depuis le départ et identité de la rame
-  (`ICE 1 · rame ICE0167 · 2e classe`) ;
-- **Carte du bar-restaurant** dans un panneau dédié — voir ci-dessous.
+En revanche l'API ne donne pas la **cause** du retard, seulement sa durée, et n'expose aucun
+compteur de données — le WiFi des ICE est sans quota.
 
-#### 🍽️ La carte du bar-restaurant — exclusivité ICE
+#### 🍽️ La carte du bar-restaurant
 
-Aucun des deux autres réseaux n'expose son offre à bord : c'est la seule compagnie des trois dont
-le portail publie un vrai catalogue. L'icône **couverts** du pied de page n'apparaît que si la rame
-déclare son service de commande actif, et ouvre un second écran du popover.
+Seul des trois portails à publier son offre à bord. L'icône couverts du pied de page n'apparaît que
+si la rame déclare son service de commande actif, et ouvre un second écran du popover.
 
 <p align="center">
   <img src="img/ice-bar.png" width="38%" />
@@ -146,13 +140,10 @@ déclare son service de commande actif, et ouvre un second écran du popover.
   70 encore servies).</sub>
 </p>
 
-La carte pèse près de 90 Ko : elle est chargée **à l'ouverture de ce panneau uniquement**, jamais
-à chaque cycle de rafraîchissement.
-
-Ce que l'API ne donne pas : la **cause** du retard (seulement sa durée), aucun **quota de
-données**, et la carte **en allemand uniquement** — vérifié via l'en-tête `Accept-Language`, les
-paramètres d'URL et le bundle du portail : le sélecteur de langue traduit les libellés du site,
-pas le catalogue.
+La carte pèse près de 90 Ko : elle n'est chargée qu'à l'ouverture de ce panneau, jamais à chaque
+cycle de rafraîchissement. Elle n'existe qu'**en allemand** — `Accept-Language`, les paramètres
+d'URL et le bundle du portail donnent tous la même réponse : le sélecteur de langue du site traduit
+les libellés, pas le catalogue.
 
 | Endpoint | Contenu utilisé |
 |---|---|
@@ -166,7 +157,7 @@ pas le catalogue.
 
 ### Comment le réseau est détecté
 
-1. Le **SSID** est comparé aux listes ci-dessus : si ça correspond, l'API du réseau est appelée
+1. Le **SSID** est comparé aux listes ci-dessus : s'il correspond, l'API du réseau est appelée
    directement.
 2. Si le SSID est **inconnu** ou **illisible** (macOS 14.4+ exige l'autorisation Localisation pour
    le lire), les APIs de tous les réseaux sont sondées en parallèle, un appel chacune. Le verdict
