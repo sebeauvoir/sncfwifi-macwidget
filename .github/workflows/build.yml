@@ -4,13 +4,19 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Deux pushes rapprochés calculeraient le même numéro de version : on sérialise.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: macos-latest
-
-    permissions:
-      contents: write
 
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -18,6 +24,44 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Le changelog se calcule sur l'historique et les tags : pas de clone superficiel.
+          fetch-depth: 0
+
+      - name: Calculer la version
+        id: version
+        run: |
+          set -euo pipefail
+          previous="$(git tag -l 'v[0-9]*' --sort=-version:refname | head -n1 || true)"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+            # Sur un tag, le précédent est celui d'avant — pas le tag qu'on publie.
+            previous="$(git tag -l 'v[0-9]*' --sort=-version:refname | grep -v "^${version}$" | head -n1 || true)"
+          else
+            # Pas encore de tag versionné : on repart de la version du bundle.
+            base="${previous:-v$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)}"
+            IFS=. read -r major minor patch <<< "${base#v}"
+            version="v${major}.${minor}.$((patch + 1))"
+          fi
+
+          # Premier passage au versionnage : le point de départ du changelog est la
+          # release roulante « latest », dernier état publié.
+          if [ -z "$previous" ] && git rev-parse -q --verify refs/tags/latest >/dev/null; then
+            previous="latest"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Version : $version (depuis ${previous:-le début de l'historique})"
+
+      - name: Estampiller la version dans le bundle
+        run: |
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION#v}" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Resources/Info.plist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
 
       - name: Build SNCFWifi.app
         run: ./build.sh
@@ -25,25 +69,21 @@ jobs:
       - name: Package app
         run: zip -r SNCFWifi.zip SNCFWifi.app
 
-      # Push sur main → met à jour la release "latest" (rolling release)
-      - name: Update rolling release (latest)
-        if: github.ref_type != 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: "Dernière version (latest)"
-          prerelease: false
-          files: SNCFWifi.zip
-          generate_release_notes: true
-          # Marque cette release roulante comme « Latest » sur GitHub pour qu'elle
-          # soit mise en avant et téléchargeable directement par les utilisateurs.
-          make_latest: true
+      - name: Rédiger le changelog
+        env:
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          python3 scripts/release_notes.py > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
 
-      # Push d'un tag (ex: v1.2.0) → Release officielle versionnée
-      - name: Create versioned release
-        if: github.ref_type == 'tag'
+      - name: Publier la release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body_path: RELEASE_NOTES.md
           files: SNCFWifi.zip
-          generate_release_notes: true
           make_latest: true
