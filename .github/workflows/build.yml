@@ -53,7 +53,8 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
-          echo "Version : $version (depuis ${previous:-le début de l'historique})"
+          # Pas d'apostrophe dans un ${...:-défaut} : bash y voit une quote ouvrante.
+          echo "Version : $version — changelog depuis ${previous:-le premier commit}"
 
       - name: Estampiller la version dans le bundle
         run: |
