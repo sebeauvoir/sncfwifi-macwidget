@@ -103,9 +103,14 @@ embarquée, pas du widget — si elle s'avère provisionnée sur d'autres rames,
 SSID reconnu : `WIFIonICE`
 
 <p align="center">
-  <img src="img/ice-panel.png" width="38%" />
+  <img src="img/ice-panel-top.png" width="38%" />
   &nbsp;&nbsp;
-  <img src="img/ice-menu.png" width="38%" />
+  <img src="img/ice-panel-bottom.png" width="38%" />
+</p>
+<p align="center">
+  <sub>En haut du panneau, la desserte donne la <b>voie de chaque arrêt</b> et signale les
+  changements (Berlin Hbf, voie <s>8</s> 7) ; en bas, la connectivité et sa prévision, la distance
+  restante, la vitesse moyenne et l'identité de la rame.</sub>
 </p>
 <p align="center">
   <img src="img/ice-menubar.png" width="26%" />
@@ -122,9 +127,27 @@ C'est l'API la plus riche des trois. Ce que le widget affiche :
   Aucun autre réseau n'annonce la dégradation à venir ;
 - **Distance restante**, **vitesse moyenne** depuis le départ et identité de la rame
   (`ICE 1 · rame ICE0167 · 2e classe`) ;
-- **Carte du bar-restaurant** dans un panneau dédié, ouvert par l'icône couverts du pied de
-  page : catégories, prix en euros et articles épuisés. Elle n'est chargée qu'à l'ouverture de ce
-  panneau, jamais à chaque cycle.
+- **Carte du bar-restaurant** dans un panneau dédié — voir ci-dessous.
+
+#### 🍽️ La carte du bar-restaurant — exclusivité ICE
+
+Aucun des deux autres réseaux n'expose son offre à bord : c'est la seule compagnie des trois dont
+le portail publie un vrai catalogue. L'icône **couverts** du pied de page n'apparaît que si la rame
+déclare son service de commande actif, et ouvre un second écran du popover.
+
+<p align="center">
+  <img src="img/ice-bar.png" width="38%" />
+  &nbsp;&nbsp;
+  <img src="img/ice-menu.png" width="38%" />
+</p>
+<p align="center">
+  <sub>Prix, grammages et descriptions ; les articles <b>épuisés</b> sont barrés, et chaque
+  catégorie affiche son compteur de disponibilité (l'en-tête donne le total, ici 64 références sur
+  70 encore servies).</sub>
+</p>
+
+La carte pèse près de 90 Ko : elle est chargée **à l'ouverture de ce panneau uniquement**, jamais
+à chaque cycle de rafraîchissement.
 
 Ce que l'API ne donne pas : la **cause** du retard (seulement sa durée), aucun **quota de
 données**, et la carte **en allemand uniquement** — vérifié via l'en-tête `Accept-Language`, les
