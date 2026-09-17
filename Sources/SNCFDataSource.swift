@@ -1,14 +1,16 @@
 import CoreLocation
 import Foundation
 
-/// WiFi SNCF (`wifi.sncf`) : TGV INOUI, Intercités, Lyria. Seul réseau à exposer la desserte,
-/// donc le seul à alimenter la timeline, le retard et les notifications d'arrivée.
+/// WiFi SNCF (`wifi.sncf`) : TGV INOUI et Intercités. Les TGV Lyria ont leur propre portail
+/// (voir `LyriaDataSource`) et ne passent pas par cette API.
 final class SNCFDataSource: TrainDataSource {
 
     let descriptor = TrainProviderDescriptor(
         id: "sncf",
         displayName: "TGV INOUI",
-        ssids: ["_sncf_wifi_inoui", "ouifi", "sncf_wifi_intercites", "wifi_sncf", "_wifi_lyria"],
+        // `_wifi_lyria` a été retiré : relevé à bord d'un Lyria, ce SSID est celui du portail
+        // `wifi.tgv-lyria.com` et routait donc droit sur `wifi.sncf`, absente de ces rames.
+        ssids: ["_sncf_wifi_inoui", "ouifi", "sncf_wifi_intercites", "wifi_sncf"],
         accentHex: 0x7D206F,
         features: [.journey, .speed, .wifiQuality, .dataQuota],
         apiHost: "wifi.sncf"

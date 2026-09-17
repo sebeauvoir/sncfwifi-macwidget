@@ -8,9 +8,9 @@ Un widget pour la barre de menus macOS qui exploite l'API du portail WiFi de vot
 afficher en temps réel les informations de votre trajet : gare suivante, vitesse, retard,
 données mobiles, etc.
 
-Trois réseaux embarqués sont pris en charge et détectés automatiquement — **WiFi SNCF**, **WiFi
-Eurostar** (transmanche et continental) et **WIFIonICE** (Deutsche Bahn). Ils n'exposent pas les
-mêmes données : le tableau des [réseaux pris en charge](#réseaux-wifi-pris-en-charge-) détaille ce
+Quatre réseaux embarqués sont pris en charge et détectés automatiquement — **WiFi SNCF**, **WiFi
+Eurostar** (transmanche et continental), **WIFIonICE** (Deutsche Bahn) et **WiFi TGV Lyria**
+(Paris ↔ Suisse). Ils n'exposent pas les mêmes données : le tableau des [réseaux pris en charge](#réseaux-wifi-pris-en-charge-) détaille ce
 qui est disponible dans chaque train.
 
 ---
@@ -36,9 +36,10 @@ système 5 / 10 / 15 min avant l'arrivée, notification de changement de voie.
 
 | Réseau | Trains | API | Desserte · retard · ETA | Voie | Vitesse | Position | Opérateurs | Données | Connectivité | Carte du bar |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **WiFi SNCF** | TGV INOUI, Intercités, Lyria | `wifi.sncf` | ✅ | ❌ | ✅ | interne¹ | ❌ | ✅ | ✅ (0…5) | ❌⁴ |
+| **WiFi SNCF** | TGV INOUI, Intercités | `wifi.sncf` | ✅ | ❌ | ✅ | interne¹ | ❌ | ✅ | ✅ (0…5) | ❌⁴ |
 | **WiFi Eurostar** | Eurostar transmanche (Londres ↔ Paris / Bruxelles / Amsterdam) et Eurostar continental (ex-Thalys) | `ombord.info` (Icomera) | ❌² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ (lien montant³) | ❌ |
 | **WIFIonICE** | ICE (Deutsche Bahn) | `iceportal.de` | ✅ | ✅ | ✅ | ✅ | ❌ | ❌⁵ | ✅ **+ prévision** | ✅ |
+| **WiFi TGV Lyria** | TGV Lyria (Paris ↔ Suisse) | `wifi.tgv-lyria.com` (Moment/21Net) | ✅ desserte, ⚠️ retard⁷ | ❌ | ✅ | ✅ | ❌ | ❌⁶ | ✅ (0…5) | ❌ |
 
 <sub>¹ La position GPS sert à détecter l'arrêt en gare, elle n'est pas affichée. ·
 ² L'API du portail n'expose aucune donnée de trajet, voir ci-dessous. ·
@@ -46,11 +47,18 @@ système 5 / 10 / 15 min avant l'arrivée, notification de changement de voie.
 comme « lien montant » plutôt que déguisé en qualité WiFi. ·
 ⁴ L'endpoint `bar/attendance` est lu et présent dans le JSON de debug, mais sa sémantique reste à
 confirmer. ·
-⁵ Le WiFi des ICE est sans quota : l'API n'expose aucun compteur.</sub>
+⁵ Le WiFi des ICE est sans quota : l'API n'expose aucun compteur. ·
+⁶ Le portail Lyria n'expose aucun compteur de données. ·
+⁷ Les horaires servis sont ceux du sillon théorique : sur la rame observée ils n'ont jamais
+été réactualisés, voir ci-dessous.</sub>
 
-### 🇫🇷 WiFi SNCF — TGV INOUI, Intercités, Lyria
+### 🇫🇷 WiFi SNCF — TGV INOUI, Intercités
 
-SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`, `_WIFI_LYRIA`
+SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
+
+> Les TGV **Lyria** figuraient ici avec le SSID `_WIFI_LYRIA`. Mesure faite à bord : ce SSID est
+> celui d'un portail distinct (voir plus bas), et il envoyait donc ces rames vers une API absente
+> du train.
 
 <p align="center">
   <img src="img/sncf-panel.gif" width="55%" />
@@ -154,6 +162,46 @@ les libellés, pas le catalogue.
 
 > ⚠️ `actualPosition` n'est **pas** la position du train mais la distance du dernier arrêt passé.
 > La position réelle vaut `actualPosition + distanceFromLastStop`.
+
+### 🇨🇭 WiFi TGV Lyria — Paris ↔ Suisse
+
+Les rames franco-suisses n'utilisent **pas** l'API `wifi.sncf` des TGV INOUI mais un portail
+Moment/21Net qui leur est propre. Il donne la desserte complète, avec les coordonnées de chaque
+gare, mais aucun compteur de données.
+
+SSID reconnu : `_WIFI_LYRIA`
+
+| Endpoint | Contenu utilisé |
+|---|---|
+| `GET https://wifi.tgv-lyria.com/api/travel/` | numéro de train, arrêts (code UIC, libellé localisé, coordonnées), horaires théoriques et réels par arrêt |
+| `GET https://wifi.tgv-lyria.com/api/train/gps/position/` | vitesse (**en m/s**), latitude, longitude, altitude |
+| `GET https://wifi.tgv-lyria.com/api/wifi/status/` | qualité WiFi (0…5), appareils connectés |
+| `GET https://wifi.tgv-lyria.com/api/transport/current/` | numéro de rame — une chaîne JSON nue (`"4729"`), pas un objet |
+
+Deux autres routes existent et ne sont pas consommées : `/api/travel/position/` (mêmes
+coordonnées, parfois rejouées sous l'id `gps-fallback`) et `/api/travel/path/` (tracé GeoJSON
+du parcours, ~55 Ko — trop lourd pour un cycle de 30 s).
+
+Comme les horaires ne sont pas réactualisés (voir ci-dessous), **le prochain arrêt et la jauge de
+progression sont déduits de la position GPS** et non des heures annoncées : la position est
+projetée sur la ligne brisée reliant les gares, dont les segments sont pondérés par leur durée
+théorique.
+
+> ⚠️ **Les horaires sont suffixés `Z` mais portent l'heure locale**, celle du fuseau annoncé à
+> côté par `departureTimezone` / `arrivalTimezone`. Lus comme de l'UTC, ils décalent toute la
+> timeline de deux heures. C'est la raison d'être de ces deux champs, superflus si les dates
+> étaient réellement en UTC.
+
+> ⚠️ **Horaires figés au sillon théorique.** Sur la rame observée, `realArrivalDate` est resté
+> rigoureusement égal à `initialArrivalDate` et `delay` à 0 pendant tout le trajet — y compris à
+> l'arrêt en gare, alors que le train y est entré 39 min avant l'heure annoncée (arrêt mesuré à
+> 10:18:55, heure publiée 10:58). Ce portail n'a donc montré **aucun suivi temps réel** : le retard
+> affiché restera 0 et l'ETA peut être décalé de plusieurs dizaines de minutes. Le code lit bien
+> l'écart entre horaire réel et théorique ; c'est l'API qui ne le renseigne pas.
+
+> ⚠️ Le portail est un Next.js qui **répond 200 avec sa page d'accueil pour tout chemin inconnu** :
+> un code HTTP ne prouve rien, chaque réponse doit être validée sur son contenu. Les chemins
+> exigent aussi leur **slash final**, faute de quoi le serveur répond 308.
 
 ### Comment le réseau est détecté
 

@@ -126,7 +126,8 @@ enum TrainProviders {
     static let all: [TrainDataSource] = [
         SNCFDataSource(),
         EurostarDataSource(),
-        ICEDataSource()
+        ICEDataSource(),
+        LyriaDataSource()
     ]
 
     static func source(forSSID ssid: String) -> TrainDataSource? {
