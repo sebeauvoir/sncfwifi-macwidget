@@ -21,7 +21,7 @@ qui est disponible dans chaque train.
 ## Le widget 🖥️
 
 **Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
-kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en petit sous les valeurs, jauge
+kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en lettres empilées à droite des valeurs (« km » sur « h », en fraction), jauge
 de progression du trajet en dessous quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
 kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` des tronçons jusqu'à
 l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
