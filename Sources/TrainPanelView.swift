@@ -5,6 +5,16 @@ import Combine
 /// Largeur fixe du panneau (style Centre de contrôle).
 private let panelWidth: CGFloat = 300
 
+/// Hauteur de la carte du trajet.
+private let mapHeight: CGFloat = 150
+
+/// Hauteur maximale du contenu : tout l'écran, moins la barre de menus et le pied du panneau.
+/// Le défilement ne sert plus que de filet sur un écran trop petit pour tout afficher.
+private var panelMaxContentHeight: CGFloat {
+    let screen = NSScreen.main?.visibleFrame.height ?? 800
+    return max(460, screen - 90)
+}
+
 extension Color {
     init(hex: UInt32) {
         self.init(red: Double((hex >> 16) & 0xFF) / 255.0,
@@ -121,6 +131,13 @@ private struct ConnectedView: View {
                     TimelineView(stops: state.stops, tint: state.provider.accent)
                 }
 
+                if showsMap {
+                    TrainMapView(stops: state.stops,
+                                 train: state.trainCoordinate,
+                                 tint: NSColor(hex: state.provider.accentHex))
+                        .frame(height: mapHeight)
+                }
+
                 if !state.metrics.isEmpty {
                     Divider()
                     MetricsView(rows: state.metrics, tint: state.provider.accent)
@@ -141,7 +158,12 @@ private struct ConnectedView: View {
             }
             .padding(16)
         }
-        .frame(maxHeight: 460)
+        .frame(maxHeight: panelMaxContentHeight)
+    }
+
+    /// Carte affichée dès qu'il y a quelque chose à y placer : le train ou une gare.
+    private var showsMap: Bool {
+        state.trainCoordinate != nil || state.stops.contains { $0.coordinate != nil }
     }
 }
 

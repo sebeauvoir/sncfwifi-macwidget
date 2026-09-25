@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// Ce qu'une API embarquée sait fournir. Pilote la forme du panneau, l'éligibilité aux
@@ -73,6 +74,19 @@ struct StatusBadge {
     }
 }
 
+/// Relevé rapide : ce que la pastille et la carte relisent chaque seconde.
+struct LiveFix {
+    let speedKmh: Int
+    /// `nil` quand l'endpoint ne donne pas de position exploitable.
+    let coordinate: CLLocationCoordinate2D?
+
+    /// Coordonnées nulles ou absentes : le GPS n'a pas de point, pas le golfe de Guinée.
+    static func coordinate(latitude: Double?, longitude: Double?) -> CLLocationCoordinate2D? {
+        guard let latitude, let longitude, latitude != 0 || longitude != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
 /// Ce qu'une source rend au contrôleur.
 struct TrainSnapshot {
     var viewState: TrainViewState
@@ -90,9 +104,9 @@ protocol TrainDataSource: AnyObject {
     func probe(completion: @escaping (Bool) -> Void)
     /// nil = API injoignable.
     func fetch(completion: @escaping (TrainSnapshot?) -> Void)
-    /// Vitesse seule en km/h, via un unique endpoint léger : la pastille la relit chaque
-    /// seconde entre deux cycles complets. `nil` = pas de réponse exploitable.
-    func fetchSpeed(completion: @escaping (Int?) -> Void)
+    /// Vitesse et position, via un unique endpoint léger : la pastille et la carte les relisent
+    /// chaque seconde entre deux cycles complets. `nil` = pas de réponse exploitable.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void)
     /// Carte du bar-restaurant, chargée à l'ouverture du panneau et non à chaque cycle.
     /// `nil` = indisponible. Un réseau sans carte n'a rien à implémenter.
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void)

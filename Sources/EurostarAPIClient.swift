@@ -100,8 +100,8 @@ final class EurostarAPIClient {
         }
     }
 
-    /// Vitesse seule, depuis `position` (en m/s).
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+    /// Vitesse (en m/s) et position, depuis `position`.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         let url = MockTrainData.shared.isEnabled
             ? MockTrainData.shared.url(path: "/api/jsonp/position/")
             : positionURL
@@ -110,7 +110,13 @@ final class EurostarAPIClient {
             return
         }
         APIBody.fetch(url: url, timeout: speedTimeout, ignoreCache: true) { position in
-            completion(EurostarAPIClient.num(position?["speed"]).map { Int(($0 * 3.6).rounded()) })
+            guard let speed = EurostarAPIClient.num(position?["speed"]) else {
+                completion(nil)
+                return
+            }
+            let coordinate = LiveFix.coordinate(latitude: EurostarAPIClient.num(position?["latitude"]),
+                                                longitude: EurostarAPIClient.num(position?["longitude"]))
+            completion(LiveFix(speedKmh: Int((speed * 3.6).rounded()), coordinate: coordinate))
         }
     }
 

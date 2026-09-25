@@ -179,25 +179,34 @@ final class MenuBarController: NSObject {
         applyTitleImage(text: "\(speedKmh) km/h", progress: progress, minWidthText: "888 km/h")
     }
 
-    /// Entre deux cycles complets, ne relit que la vitesse : un seul petit appel par seconde.
+    /// Entre deux cycles complets, ne relit que la vitesse et la position : un seul petit
+    /// appel par seconde.
     private func refreshSpeed() {
         guard !speedRequestInFlight, speedKmh != nil, let source = activeSource else { return }
         let token = refreshToken
         speedRequestInFlight = true
-        source.fetchSpeed { [weak self] speed in
+        source.fetchLive { [weak self] fix in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.speedRequestInFlight = false
                 // Un cycle complet passé entre-temps fait foi (changement de train, déconnexion).
-                guard self.isCurrent(token), self.speedKmh != nil,
-                      let speed, speed != self.speedKmh
-                else { return }
-                self.speedKmh = speed
-                self.redrawTitle()
-                if case .connected(var viewState) = self.store.state {
-                    viewState.speedKmh = speed
-                    self.store.state = .connected(viewState)
+                guard self.isCurrent(token), self.speedKmh != nil, let fix else { return }
+
+                if fix.speedKmh != self.speedKmh {
+                    self.speedKmh = fix.speedKmh
+                    self.redrawTitle()
                 }
+
+                guard case .connected(var viewState) = self.store.state else { return }
+                let moved = fix.coordinate.map { new in
+                    viewState.trainCoordinate.map {
+                        $0.latitude != new.latitude || $0.longitude != new.longitude
+                    } ?? true
+                } ?? false
+                guard moved || viewState.speedKmh != fix.speedKmh else { return }
+                viewState.speedKmh = fix.speedKmh
+                if moved { viewState.trainCoordinate = fix.coordinate }
+                self.store.state = .connected(viewState)
             }
         }
     }

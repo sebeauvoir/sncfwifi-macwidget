@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreLocation
 
 /// Modèle de vue exposé au panneau SwiftUI. Purement des données, aucune logique AppKit.
 
@@ -23,6 +24,8 @@ struct StopRow: Identifiable {
     var platform: String?
     /// Voie initialement prévue, pour signaler un changement.
     var scheduledPlatform: String?
+    /// Position de la gare, pour la carte. `nil` quand le réseau ne la publie pas.
+    var coordinate: CLLocationCoordinate2D?
 
     /// Vrai quand la voie annoncée n'est plus celle prévue.
     var platformChanged: Bool {
@@ -112,6 +115,8 @@ struct TrainViewState {
     var globalProgress: Double = 0
 
     var speedKmh: Int = 0
+    /// Position du train, pour la carte. Relue chaque seconde avec la vitesse.
+    var trainCoordinate: CLLocationCoordinate2D?
 
     var wifiQuality: Int?      // 0…5
     var wifiDevices: Int?

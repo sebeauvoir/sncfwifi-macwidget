@@ -22,8 +22,8 @@ final class SNCFDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -234,9 +234,14 @@ final class SNCFDataSource: TrainDataSource {
                 realTime: APIValue.time(stop["realDate"] as? String) ?? "",
                 arrivalDate: APIValue.date(stop["realDate"] as? String ?? stop["theoricDate"] as? String),
                 delayMin: delay,
-                status: status
+                status: status,
+                coordinate: (stop["coordinates"] as? [String: Any]).flatMap {
+                    LiveFix.coordinate(latitude: APIValue.double($0["latitude"]),
+                                       longitude: APIValue.double($0["longitude"]))
+                }
             )
         }
+        viewState.trainCoordinate = LiveFix.coordinate(latitude: currentLat, longitude: currentLon)
 
         // Qualité WiFi
         if let stats = stats {
