@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Un push qui ne touche que la documentation ne publie pas de release : ses commits
+    # figureront dans le changelog de la suivante. Sans effet sur les tags.
+    paths-ignore:
+      - "**.md"
+      - "img/**"
+      - ".gitignore"
   workflow_dispatch:
 
 permissions:

@@ -36,7 +36,8 @@ Pour chaque modification :
    (historique linéaire, changelog propre). GitHub supprime alors la branche tout seul
    (« Automatically delete head branches » est activé).
 5. Le push sur `main` publie la release suivante : vérifier que le run a réussi et donner le
-   lien de la release.
+   lien de la release. Exception : un push qui ne touche que `*.md`, `img/` ou `.gitignore`
+   ne déclenche aucun build (`paths-ignore`), ses commits rejoignent le changelog suivant.
 
 ## Limites connues des sessions cloud
 
