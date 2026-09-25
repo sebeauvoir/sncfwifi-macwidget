@@ -1,12 +1,15 @@
 # SNCFWifi — Widget barre de menus macOS 🚄
 
-[![Build](https://github.com/antvgr/sncfwifi-macwidget/actions/workflows/build.yml/badge.svg)](https://github.com/antvgr/sncfwifi-macwidget/actions/workflows/build.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/antvgr/sncfwifi-macwidget?include_prereleases)](https://github.com/antvgr/sncfwifi-macwidget/releases/latest)
+[![Build](https://github.com/sebeauvoir/sncfwifi-macwidget/actions/workflows/build.yml/badge.svg)](https://github.com/sebeauvoir/sncfwifi-macwidget/actions/workflows/build.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/sebeauvoir/sncfwifi-macwidget?include_prereleases)](https://github.com/sebeauvoir/sncfwifi-macwidget/releases/latest)
 [![Coding with AI](https://img.shields.io/badge/Coding_with-AI-blue?style=flat)](https://github.com/nuclearrockstone/coding-with-ai-badge)
 
 Un widget pour la barre de menus macOS qui exploite l'API du portail WiFi de votre train pour
 afficher en temps réel les informations de votre trajet : gare suivante, vitesse, retard,
 données mobiles, etc.
+
+> Fork de [antvgr/sncfwifi-macwidget](https://github.com/antvgr/sncfwifi-macwidget) : la pastille
+> affiche la vitesse du train, relue chaque seconde, avec la jauge de progression du trajet.
 
 Quatre réseaux embarqués sont pris en charge et détectés automatiquement — **WiFi SNCF**, **WiFi
 Eurostar** (transmanche et continental), **WIFIonICE** (Deutsche Bahn) et **WiFi TGV Lyria**
@@ -223,7 +226,7 @@ Hors d'un réseau connu, le widget ne fait aucun appel : c'est autant de batteri
 
 > Pas besoin de compiler — téléchargez directement le `.zip` depuis la page **Releases**.
 
-**[→ Télécharger la dernière version](https://github.com/antvgr/sncfwifi-macwidget/releases/latest)**
+**[→ Télécharger la dernière version](https://github.com/sebeauvoir/sncfwifi-macwidget/releases/latest)**
 
 1. Décompressez le `.zip`
 2. Glissez `SNCFWifi.app` dans votre dossier `Applications`
@@ -240,7 +243,7 @@ Hors d'un réseau connu, le widget ne fait aucun appel : c'est autant de batteri
 ## Installation via Homebrew 🍺
 
 ```bash
-brew tap antvgr/sncfwifi https://github.com/antvgr/sncfwifi-macwidget
+brew tap sebeauvoir/sncfwifi https://github.com/sebeauvoir/sncfwifi-macwidget
 brew install --cask sncfwifi
 ```
 
@@ -296,6 +299,11 @@ final class MonReseauDataSource: TrainDataSource {
 
     func probe(completion: @escaping (Bool) -> Void) {
         // Un seul appel : « suis-je à bord ? »
+    }
+
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        // Vitesse seule en km/h, via un unique endpoint léger : la pastille la
+        // relit chaque seconde entre deux cycles complets. nil si pas de réponse.
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {

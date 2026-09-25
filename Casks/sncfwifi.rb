@@ -2,10 +2,10 @@ cask "sncfwifi" do
   version :latest
   sha256 :no_check
 
-  url "https://github.com/antvgr/sncfwifi-macwidget/releases/latest/download/SNCFWifi.zip"
+  url "https://github.com/sebeauvoir/sncfwifi-macwidget/releases/latest/download/SNCFWifi.zip"
   name "SNCFWifi"
   desc "Menu bar widget showing real-time TGV Inoui journey info from the train WiFi API"
-  homepage "https://github.com/antvgr/sncfwifi-macwidget"
+  homepage "https://github.com/sebeauvoir/sncfwifi-macwidget"
 
   depends_on macos: :big_sur
 
