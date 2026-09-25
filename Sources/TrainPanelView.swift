@@ -224,14 +224,15 @@ private struct HeaderView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if state.speedKmh > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "speedometer")
-                            .foregroundColor(state.provider.accent)
-                        Text("\(state.speedKmh) km/h")
-                            .foregroundColor(.primary)
+                if state.speedKmh > 0 || state.remainingKm != nil {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        if state.speedKmh > 0 {
+                            readout(symbol: "speedometer", value: "\(state.speedKmh)", unit: "km/h")
+                        }
+                        if let km = state.remainingKm {
+                            readout(symbol: "mappin.and.ellipse", value: DistanceFormat.km(km), unit: "km restants")
+                        }
                     }
-                    .font(.system(size: 12, weight: .semibold))
                     .fixedSize()
                 }
             }
@@ -246,6 +247,21 @@ private struct HeaderView: View {
                 }
                 .font(.system(size: 11, weight: .medium))
             }
+        }
+    }
+
+    /// « ⏱ 278 km/h » : valeur en gras, unité plus petite et discrète.
+    private func readout(symbol: String, value: String, unit: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(state.provider.accent)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.primary)
+            + Text(" \(unit)")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
         }
     }
 

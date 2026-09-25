@@ -20,19 +20,21 @@ qui est disponible dans chaque train.
 
 ## Le widget 🖥️
 
-**Pastille** — la vitesse du train, en permanence et sur tous les réseaux (`278 km/h`,
-`0 km/h` à l'arrêt), avec la jauge de progression du trajet en dessous quand le réseau
-expose une desserte (SNCF, ICE, Lyria). Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+**Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
+kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en petit sous les valeurs, jauge
+de progression du trajet en dessous quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
+kilomètres suivent le tracé des voies quand le réseau le publie (SNCF, Lyria), les distances de
+l'API chez ICE, sinon les gares en ligne droite. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
 données est rafraîchi toutes les 30 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
-**Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
+**Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte complète avec les
 horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
 `wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
 relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
 du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
 main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
-et seul le zoom reste permis. Le tracé suit les voies quand le réseau le
+et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. Le tracé suit les voies quand le réseau le
 publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
