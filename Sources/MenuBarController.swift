@@ -42,7 +42,7 @@ final class MenuBarController: NSObject {
 
     /// Kilomètres restants jusqu'à la gare d'arrivée choisie, à droite de la vitesse.
     private var remainingKm: Double?
-    /// Valeur de l'API (SNCF, ICE), relue toutes les 30 s.
+    /// Valeur de l'API (SNCF, ICE), relue à chaque cycle complet.
     private var sourceRemainingKm: Double?
     /// Distance parcourue d'après le GPS depuis cette lecture : retranchée à la valeur de
     /// l'API, le compteur baisse chaque seconde au lieu de sauter de 2 à 3 km.
@@ -118,7 +118,7 @@ final class MenuBarController: NSObject {
         }
 
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: TrainStore.fullRefreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
         speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
