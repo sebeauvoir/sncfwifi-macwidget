@@ -15,7 +15,7 @@ la jauge de progression du trajet en dessous.
 - Les sessions cloud tournent sous Linux, sans compilateur Swift : impossible de lancer
   `./build.sh` sur place. La compilation se vérifie via GitHub Actions (build de test, ci-dessous).
 - Tout nouveau fichier Swift doit être ajouté à `SWIFT_SOURCES` dans `build.sh` (liste explicite).
-- Un nouveau réseau doit implémenter `TrainDataSource`, y compris `fetchSpeed` (pas de valeur
+- Un nouveau réseau doit implémenter `TrainDataSource`, y compris `fetchLive` (pas de valeur
   par défaut) : voir « Ajouter un réseau » dans le README.
 
 ## Processus de livraison

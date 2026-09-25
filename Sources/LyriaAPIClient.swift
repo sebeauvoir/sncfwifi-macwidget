@@ -99,15 +99,19 @@ final class LyriaAPIClient {
         }
     }
 
-    /// Vitesse seule, depuis le GPS brut (en m/s). Pas de repli sur `travel/position` : le
-    /// cycle complet s'en charge toutes les 30 s.
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+    /// Vitesse (en m/s) et position, depuis le GPS brut. Pas de repli sur `travel/position` :
+    /// le cycle complet s'en charge toutes les 30 s.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         APIBody.fetch(url: gpsURL, timeout: speedTimeout, ignoreCache: true) { gps in
-            guard LyriaAPIClient.looksLikePosition(gps) else {
+            guard LyriaAPIClient.looksLikePosition(gps),
+                  let speed = APIValue.double(gps?["speed"])
+            else {
                 completion(nil)
                 return
             }
-            completion(APIValue.double(gps?["speed"]).map { Int(($0 * 3.6).rounded()) })
+            let coordinate = LiveFix.coordinate(latitude: APIValue.double(gps?["latitude"]),
+                                                longitude: APIValue.double(gps?["longitude"]))
+            completion(LiveFix(speedKmh: Int((speed * 3.6).rounded()), coordinate: coordinate))
         }
     }
 

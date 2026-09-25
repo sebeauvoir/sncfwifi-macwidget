@@ -28,6 +28,7 @@ SWIFT_SOURCES=(
     "${SRC_DIR}/StatusBarImageGenerator.swift"
     "${SRC_DIR}/TrainPanelModel.swift"
     "${SRC_DIR}/TrainPanelView.swift"
+    "${SRC_DIR}/TrainMapView.swift"
 )
 
 echo "🔨 Compilation de ${APP_NAME} (binaire universel arm64 + x86_64)…"
@@ -39,6 +40,7 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 # Compilation arm64
 swiftc "${SWIFT_SOURCES[@]}" \
     -framework Cocoa \
+    -framework MapKit \
     -O \
     -target arm64-apple-macos11.0 \
     -o "/tmp/${APP_NAME}_arm64"
@@ -46,6 +48,7 @@ swiftc "${SWIFT_SOURCES[@]}" \
 # Compilation x86_64
 swiftc "${SWIFT_SOURCES[@]}" \
     -framework Cocoa \
+    -framework MapKit \
     -O \
     -target x86_64-apple-macos11.0 \
     -o "/tmp/${APP_NAME}_x86_64"

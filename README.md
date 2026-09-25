@@ -27,7 +27,9 @@ données est rafraîchi toutes les 30 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
 **Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
-horaires théoriques barrés en cas de retard ; puis les métriques propres au réseau. Un second
+horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
+`wifi.sncf/fr/journey` (tracé entre les gares, portion parcourue, position du train relue chaque
+seconde) ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
 **Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
@@ -301,15 +303,17 @@ final class MonReseauDataSource: TrainDataSource {
         // Un seul appel : « suis-je à bord ? »
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        // Vitesse seule en km/h, via un unique endpoint léger : la pastille la
-        // relit chaque seconde entre deux cycles complets. nil si pas de réponse.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        // Vitesse en km/h et position, via un unique endpoint léger : la pastille
+        // et la carte les relisent chaque seconde. nil si pas de réponse.
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         // Appelez votre API, puis rendez un TrainSnapshot (nil si injoignable).
         // Les spécificités du réseau passent par TrainViewState.metrics :
         //   MetricRow(id: "position", symbol: "location.fill", text: "…")
+        // Renseignez StopRow.coordinate et TrainViewState.trainCoordinate pour
+        // placer gares et train sur la carte du panneau.
         // Déclarez .journey et remplissez stops + JourneyContext pour obtenir
         // la timeline, l'ETA et les notifications d'arrivée sans code en plus.
         // Renseignez StopRow.platform / .scheduledPlatform et la voie s'affiche

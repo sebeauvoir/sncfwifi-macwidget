@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// WiFi Eurostar (transmanche et continental ex-Thalys) : portail Icomera « Internet Ombord ».
@@ -21,8 +22,8 @@ final class EurostarDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -43,6 +44,7 @@ final class EurostarDataSource: TrainDataSource {
             headerSubtitle: snap.rameNumber.map { "Rame \($0)" } ?? snap.systemName,
             speedKmh: snap.speedKmh
         )
+        state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
 
         if let used = snap.dataUsedMB, let limit = snap.dataLimitMB, limit > 0 {
             state.dataConsumedMB = used

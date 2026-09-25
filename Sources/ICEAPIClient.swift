@@ -14,6 +14,8 @@ struct ICESnapshot {
         let scheduledPlatform: String?
         let platform: String?
         let distanceFromStart: Int
+        let latitude: Double?
+        let longitude: Double?
         /// `passed`, `departed` ou `future`.
         let positionStatus: String
 
@@ -111,10 +113,16 @@ final class ICEAPIClient {
         }
     }
 
-    /// Vitesse seule, depuis `status` (déjà en km/h).
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+    /// Vitesse (déjà en km/h) et position, depuis `status`.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         APIBody.fetch(url: statusURL, timeout: speedTimeout, ignoreCache: true) { status in
-            completion(APIValue.double(status?["speed"]).map { Int($0.rounded()) })
+            guard let speed = APIValue.double(status?["speed"]) else {
+                completion(nil)
+                return
+            }
+            let coordinate = LiveFix.coordinate(latitude: APIValue.double(status?["latitude"]),
+                                                longitude: APIValue.double(status?["longitude"]))
+            completion(LiveFix(speedKmh: Int(speed.rounded()), coordinate: coordinate))
         }
     }
 
@@ -205,6 +213,7 @@ final class ICEAPIClient {
         let timetable = raw["timetable"] as? [String: Any] ?? [:]
         let track = raw["track"] as? [String: Any] ?? [:]
         let info = raw["info"] as? [String: Any] ?? [:]
+        let geo = station["geocoordinates"] as? [String: Any] ?? [:]
 
         let scheduledDeparture = epochDate(timetable["scheduledDepartureTime"])
         let actualDeparture = epochDate(timetable["actualDepartureTime"])
@@ -223,6 +232,8 @@ final class ICEAPIClient {
             scheduledPlatform: (track["scheduled"] as? String)?.nonEmpty,
             platform: ((track["actual"] as? String) ?? (track["scheduled"] as? String))?.nonEmpty,
             distanceFromStart: APIValue.int(info["distanceFromStart"]),
+            latitude: APIValue.double(geo["latitude"]),
+            longitude: APIValue.double(geo["longitude"]),
             positionStatus: (info["positionStatus"] as? String) ?? "future"
         )
     }

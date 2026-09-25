@@ -24,8 +24,8 @@ final class TrainAPIClient {
         fetch(url: gpsURL) { completion($0 != nil) }
     }
 
-    /// Vitesse seule, depuis `train/gps` (en m/s).
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+    /// Vitesse (en m/s) et position, depuis `train/gps`.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         let url = MockTrainData.shared.isEnabled
             ? MockTrainData.shared.url(path: "/router/api/train/gps")
             : gpsURL
@@ -34,7 +34,15 @@ final class TrainAPIClient {
             return
         }
         APIBody.fetch(url: url, timeout: speedTimeout, ignoreCache: true) { gps in
-            completion(APIValue.double(gps?["speed"]).map { Int($0 * 3.6) })
+            guard let speed = APIValue.double(gps?["speed"]) else {
+                completion(nil)
+                return
+            }
+            let coordinate = LiveFix.coordinate(
+                latitude: APIValue.double(gps?["latitude"]) ?? APIValue.double(gps?["lat"]),
+                longitude: APIValue.double(gps?["longitude"]) ?? APIValue.double(gps?["lon"]) ?? APIValue.double(gps?["lng"])
+            )
+            completion(LiveFix(speedKmh: Int(speed * 3.6), coordinate: coordinate))
         }
     }
 
