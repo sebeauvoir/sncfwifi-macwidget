@@ -83,7 +83,7 @@ final class EurostarDataSource: TrainDataSource {
         if let heading = snap.headingDeg, snap.speedKmh > 0 {
             rows.append(MetricRow(id: "heading",
                                   symbol: "location.north.fill",
-                                  text: "Cap \(EurostarDataSource.cardinal(heading)) (\(Int(heading.rounded()))°)",
+                                  text: "Cap \(Compass.cardinal(heading)) (\(Int(heading.rounded()))°)",
                                   span: .half))
         }
         if let uplink = uplinkText(snap) {
@@ -147,14 +147,5 @@ final class EurostarDataSource: TrainDataSource {
         if snap.uplinkLinksTotal > 0 { parts.append("\(snap.uplinkLinksUp)/\(snap.uplinkLinksTotal) liens") }
         if let rssi = snap.uplinkRSSI { parts.append("\(rssi) dBm") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// Cap en degrés → point cardinal français (16 secteurs, « O » pour ouest).
-    private static func cardinal(_ degrees: Double) -> String {
-        let names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-                     "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
-        let normalized = degrees.truncatingRemainder(dividingBy: 360)
-        let positive = normalized < 0 ? normalized + 360 : normalized
-        return names[Int((positive / 22.5).rounded()) % names.count]
     }
 }

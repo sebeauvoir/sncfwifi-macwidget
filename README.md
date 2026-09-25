@@ -36,7 +36,10 @@ horaires théoriques barrés en cas de retard ; une carte du trajet, à la mani�
 relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
 du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
 main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
-et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. Le tracé suit les voies quand le réseau le
+et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. En bas du panneau, une section
+**En vrac** (WiFi SNCF) rassemble le reste de ce que l'API expose : altitude, cap, distance
+parcourue, vitesse moyenne, temps restant, débit accordé, attente au bar, CO₂ évité par rapport à
+la voiture, durées d'arrêt, numéro de rame. Le tracé suit les voies quand le réseau le
 publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
@@ -88,6 +91,7 @@ SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
 | `GET /router/api/connection/statistics` | qualité WiFi (0…5), appareils connectés |
 | `GET /router/api/connection/status` | données consommées / restantes, prochaine remise à zéro |
 | `GET /router/api/bar/attendance` | affluence au bar — lue et présente dans le JSON de debug, pas encore affichée |
+| `GET /co2/meta.json` | part de CO₂ évitée par rapport à la voiture, par couple de gares (codes UIC de `details.stationUicCodes`), chargée une fois |
 | `GET /router/api/train/graph` | tracé des voies du trajet, GeoJSON `LineString` d'origine en terminus (~40 Ko), chargé **une fois par trajet** pour la carte |
 | `GET /karto/style-light.json`, `/maps/*.pmtiles`, `/maps/fonts/…`, `/maps/sprites/…` | fond de carte hors ligne du portail (style MapLibre, tuiles vectorielles PMTiles de l'Europe et des voies ferrées) — voir `Resources/Map/README.md` |
 

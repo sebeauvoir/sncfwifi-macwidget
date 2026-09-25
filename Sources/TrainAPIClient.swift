@@ -12,6 +12,14 @@ final class TrainAPIClient {
     private let statusURL     = URL(string: "https://wifi.sncf/router/api/connection/status")!
     /// Tracé des voies du trajet, en GeoJSON `LineString` (origine → terminus), ~40 Ko.
     private let graphURL      = URL(string: "https://wifi.sncf/router/api/train/graph")!
+    /// Part de CO₂ évitée par rapport à la voiture, par couple origine → destination (codes UIC).
+    private let co2URL        = URL(string: "https://wifi.sncf/co2/meta.json")!
+
+    /// Table CO₂ du portail, chargée une fois : elle ne dépend pas du moment.
+    private(set) var co2Table: [[String: Any]]?
+    /// Dernière réponse de `details` : elle seule porte la rame (`trainId`) et les codes UIC
+    /// du trajet, que `progress` n'a pas.
+    private(set) var lastDetails: [String: Any]?
     
     private let timeout: TimeInterval = 5
     /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
@@ -105,7 +113,15 @@ final class TrainAPIClient {
         group.enter()
         fetch(url: statusURL) { statusData = $0; group.leave() }
 
+        var co2Data: [[String: Any]]?
+        if co2Table == nil {
+            group.enter()
+            APIBody.fetchArray(url: co2URL, timeout: timeout) { co2Data = $0; group.leave() }
+        }
+
         group.notify(queue: .main) {
+            if let co2Data { self.co2Table = co2Data }
+            if let detailsData { self.lastDetails = detailsData }
             completion(gpsData, progressData ?? detailsData, barData, statsData, statusData)
         }
     }
