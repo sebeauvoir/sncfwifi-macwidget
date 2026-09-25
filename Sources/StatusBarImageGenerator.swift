@@ -17,7 +17,7 @@ class StatusBarImageGenerator {
 
         // Chiffres à chasse fixe : la vitesse ne fait pas trembler la pastille.
         let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-        let unitFont = NSFont.systemFont(ofSize: 6.5, weight: .medium)
+        let unitFont = NSFont.systemFont(ofSize: 5.5, weight: .medium)
         // Noir : transformé par isTemplate selon le thème de la barre de menus.
         let valueAttributes: [NSAttributedString.Key: Any] = [.font: valueFont, .foregroundColor: NSColor.black]
         let unitAttributes: [NSAttributedString.Key: Any] = [.font: unitFont, .foregroundColor: NSColor.black]
@@ -41,7 +41,7 @@ class StatusBarImageGenerator {
         let barY: CGFloat = 1.5
         let barHeight: CGFloat = 2.5
         let unitBaseline: CGFloat = (progress == nil ? 2.5 : barY + barHeight + 2) + (height - 22) / 2
-        let valueBaseline = unitBaseline + unitFont.capHeight + 2.5
+        let valueBaseline = unitBaseline + unitFont.capHeight + 2.25
 
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()

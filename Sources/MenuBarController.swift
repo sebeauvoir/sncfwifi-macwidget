@@ -42,8 +42,12 @@ final class MenuBarController: NSObject {
 
     /// Kilomètres restants jusqu'à la gare d'arrivée choisie, à droite de la vitesse.
     private var remainingKm: Double?
-    /// Valeur de la source (ICE), en repli quand il n'y a pas de tracé.
+    /// Valeur de l'API (SNCF, ICE), relue toutes les 30 s.
     private var sourceRemainingKm: Double?
+    /// Distance parcourue d'après le GPS depuis cette lecture : retranchée à la valeur de
+    /// l'API, le compteur baisse chaque seconde au lieu de sauter de 2 à 3 km.
+    private var movedSinceSource: CLLocationDistance = 0
+    private var lastLiveCoordinate: CLLocationCoordinate2D?
 
     /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
@@ -209,17 +213,19 @@ final class MenuBarController: NSObject {
     // MARK: - Kilomètres restants
 
     /// Met à jour les kilomètres restants de l'état affiché et, s'ils changent à l'affichage,
-    /// la pastille.
+    /// la pastille. La valeur de l'API prime ; à défaut (Lyria, Eurostar), calcul le long du
+    /// tracé ou de gare en gare.
     private func updateRemaining(_ viewState: inout TrainViewState) {
-        let km = remainingDistanceKm(viewState) ?? sourceRemainingKm
+        let km = sourceRemainingKm.map { max(0, $0 - movedSinceSource / 1000) }
+            ?? remainingDistanceKm(viewState)
         viewState.remainingKm = km
         let changed = km.map(DistanceFormat.km) != remainingKm.map(DistanceFormat.km)
         remainingKm = km
         if changed { redrawTitle() }
     }
 
-    /// Distance jusqu'à la gare d'arrivée choisie : le long du tracé quand le réseau le publie,
-    /// sinon la valeur de la source (ICE), sinon de gare en gare en ligne droite.
+    /// Distance jusqu'à la gare d'arrivée choisie, faute de valeur fournie par l'API : le long
+    /// du tracé quand le réseau le publie, sinon de gare en gare en ligne droite.
     private func remainingDistanceKm(_ viewState: TrainViewState) -> Double? {
         guard let arrivalId = viewState.selectedArrivalId,
               let arrivalIndex = viewState.stops.firstIndex(where: { $0.id == arrivalId }),
@@ -234,7 +240,6 @@ final class MenuBarController: NSObject {
             let along = routeCumulative[end] - routeCumulative[cut]
             return (along + Self.distance(train, routePath[cut])) / 1000
         }
-        if sourceRemainingKm != nil { return nil }
 
         var total: CLLocationDistance = 0
         var from = train
@@ -288,6 +293,10 @@ final class MenuBarController: NSObject {
                 guard moved || viewState.speedKmh != fix.speedKmh else { return }
                 viewState.speedKmh = fix.speedKmh
                 if moved {
+                    if let previous = self.lastLiveCoordinate, let coordinate = fix.coordinate {
+                        self.movedSinceSource += Self.distance(previous, coordinate)
+                    }
+                    self.lastLiveCoordinate = fix.coordinate
                     viewState.trainCoordinate = fix.coordinate
                     self.recordTrail(fix.coordinate)
                     viewState.trail = self.trail
@@ -477,6 +486,8 @@ final class MenuBarController: NSObject {
             self.progress = nil
             self.remainingKm = nil
             self.sourceRemainingKm = nil
+            self.movedSinceSource = 0
+            self.lastLiveCoordinate = nil
             self.tripKey = nil
             self.trail = []
             self.routePath = []
@@ -524,6 +535,8 @@ final class MenuBarController: NSObject {
             viewState.trail = self.trail
             viewState.routePath = self.routePath
             self.sourceRemainingKm = snapshot.viewState.remainingKm
+            self.movedSinceSource = 0
+            self.lastLiveCoordinate = viewState.trainCoordinate
             self.updateRemaining(&viewState)
             self.redrawTitle()
             self.publish(.connected(viewState))
