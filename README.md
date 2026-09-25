@@ -28,8 +28,11 @@ Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
 **Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
 horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
-`wifi.sncf/fr/journey` (tracé entre les gares, portion parcourue, position du train relue chaque
-seconde) ; puis les métriques propres au réseau. Un second
+`wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
+relue chaque seconde, cadrage qui suit le train jusqu'à la gare d'arrivée choisie (un zoom ou un
+déplacement à la main suspend le suivi une minute). Le tracé suit les voies quand le réseau le
+publie (Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
+de l'app et le reste relie les gares en ligne droite ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
 **Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
@@ -182,10 +185,10 @@ SSID reconnu : `_WIFI_LYRIA`
 | `GET https://wifi.tgv-lyria.com/api/train/gps/position/` | vitesse (**en m/s**), latitude, longitude, altitude |
 | `GET https://wifi.tgv-lyria.com/api/wifi/status/` | qualité WiFi (0…5), appareils connectés |
 | `GET https://wifi.tgv-lyria.com/api/transport/current/` | numéro de rame — une chaîne JSON nue (`"4729"`), pas un objet |
+| `GET https://wifi.tgv-lyria.com/api/travel/path/` | tracé GeoJSON du parcours (~55 Ko), chargé **une fois par trajet** pour la carte |
 
-Deux autres routes existent et ne sont pas consommées : `/api/travel/position/` (mêmes
-coordonnées, parfois rejouées sous l'id `gps-fallback`) et `/api/travel/path/` (tracé GeoJSON
-du parcours, ~55 Ko — trop lourd pour un cycle de 30 s).
+`/api/travel/position/` existe aussi et n'est pas consommé : mêmes coordonnées, parfois rejouées
+sous l'id `gps-fallback`.
 
 Comme les horaires ne sont pas réactualisés (voir ci-dessous), **le prochain arrêt et la jauge de
 progression sont déduits de la position GPS** et non des heures annoncées : la position est
