@@ -1,5 +1,5 @@
-# Documentation locale Claude Code (non partagée)
-CLAUDE.md
+# Réglages locaux Claude Code (CLAUDE.md, lui, est versionné : les sessions cloud partent
+# d'un clone neuf et ne liraient pas une copie locale)
 .claude/
 
 # macOS
