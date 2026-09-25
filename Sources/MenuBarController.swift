@@ -623,7 +623,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func openAbout() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/antvgr/sncfwifi-macwidget")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/sebeauvoir/sncfwifi-macwidget")!)
     }
 
     @objc private func copyDebugData() {
