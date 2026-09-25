@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// Ce qu'une API embarquée sait fournir. Pilote la forme du panneau, l'éligibilité aux
@@ -28,6 +29,9 @@ struct TrainProviderDescriptor {
     /// `ombord.info` pointe sur le routeur du train ; sans ce contrôle, une API joignable
     /// depuis l'internet public afficherait un train fantôme.
     var requiresPrivateAPIHost: Bool = false
+    /// Origine du serveur de tuiles embarqué (style `karto/style-light.json`, tuiles PMTiles).
+    /// Renseignée, la carte du panneau n'utilise que lui : aucune requête vers Internet.
+    var mapTilesOrigin: URL? = nil
 }
 
 /// Ce dont les notifications avant arrivée ont besoin, quel que soit le réseau.
@@ -73,6 +77,49 @@ struct StatusBadge {
     }
 }
 
+/// Relevé rapide : ce que la pastille et la carte relisent chaque seconde.
+struct LiveFix {
+    let speedKmh: Int
+    /// `nil` quand l'endpoint ne donne pas de position exploitable.
+    let coordinate: CLLocationCoordinate2D?
+
+    /// Coordonnées nulles ou absentes : le GPS n'a pas de point, pas le golfe de Guinée.
+    static func coordinate(latitude: Double?, longitude: Double?) -> CLLocationCoordinate2D? {
+        guard let latitude, let longitude, latitude != 0 || longitude != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+/// Lecture tolérante d'un GeoJSON : `LineString`, `MultiLineString`, `Feature` ou
+/// `FeatureCollection`, mis bout à bout. Les positions GeoJSON sont en [longitude, latitude].
+enum GeoJSONPath {
+    static func coordinates(from json: Any?) -> [CLLocationCoordinate2D] {
+        guard let object = json as? [String: Any] else { return [] }
+        switch object["type"] as? String {
+        case "FeatureCollection":
+            return ((object["features"] as? [Any]) ?? []).flatMap { coordinates(from: $0) }
+        case "Feature":
+            return coordinates(from: object["geometry"])
+        case "LineString":
+            return points(object["coordinates"])
+        case "MultiLineString":
+            return ((object["coordinates"] as? [Any]) ?? []).flatMap(points)
+        default:
+            return []
+        }
+    }
+
+    private static func points(_ value: Any?) -> [CLLocationCoordinate2D] {
+        ((value as? [Any]) ?? []).compactMap { position in
+            guard let pair = position as? [Any], pair.count >= 2,
+                  let longitude = APIValue.double(pair[0]),
+                  let latitude = APIValue.double(pair[1])
+            else { return nil }
+            return LiveFix.coordinate(latitude: latitude, longitude: longitude)
+        }
+    }
+}
+
 /// Ce qu'une source rend au contrôleur.
 struct TrainSnapshot {
     var viewState: TrainViewState
@@ -90,16 +137,23 @@ protocol TrainDataSource: AnyObject {
     func probe(completion: @escaping (Bool) -> Void)
     /// nil = API injoignable.
     func fetch(completion: @escaping (TrainSnapshot?) -> Void)
-    /// Vitesse seule en km/h, via un unique endpoint léger : la pastille la relit chaque
-    /// seconde entre deux cycles complets. `nil` = pas de réponse exploitable.
-    func fetchSpeed(completion: @escaping (Int?) -> Void)
+    /// Vitesse et position, via un unique endpoint léger : la pastille et la carte les relisent
+    /// chaque seconde entre deux cycles complets. `nil` = pas de réponse exploitable.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void)
     /// Carte du bar-restaurant, chargée à l'ouverture du panneau et non à chaque cycle.
     /// `nil` = indisponible. Un réseau sans carte n'a rien à implémenter.
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void)
+    /// Tracé réel de la ligne, chargé une fois par trajet. `nil` = non publié : la carte relie
+    /// alors les gares en ligne droite. Un réseau sans tracé n'a rien à implémenter.
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void)
 }
 
 extension TrainDataSource {
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void) {
+        completion(nil)
+    }
+
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
         completion(nil)
     }
 

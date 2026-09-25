@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// WIFIonICE : portail embarqué de la Deutsche Bahn (`iceportal.de`). Seul réseau à donner la
@@ -23,8 +24,8 @@ final class ICEDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -58,7 +59,8 @@ final class ICEDataSource: TrainDataSource {
                 delayMin: stop.arrivalDelayMin,
                 status: status,
                 platform: stop.platform,
-                scheduledPlatform: stop.scheduledPlatform
+                scheduledPlatform: stop.scheduledPlatform,
+                coordinate: LiveFix.coordinate(latitude: stop.latitude, longitude: stop.longitude)
             )
         }
 
@@ -87,6 +89,11 @@ final class ICEDataSource: TrainDataSource {
         )
         state.selectedArrivalId = arrivalStop?.id
         state.metrics = metrics(for: snap)
+        // Distances réelles fournies par l'API : celle de la gare d'arrivée moins le parcouru.
+        if snap.totalDistanceM > 0, snap.stops.indices.contains(arrivalIndex) {
+            state.remainingKm = Double(max(0, snap.stops[arrivalIndex].distanceFromStart - snap.travelledM)) / 1000
+        }
+        state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
 
         let badge = StatusBadge(
             text: ICEDataSource.shortStationName(destination),

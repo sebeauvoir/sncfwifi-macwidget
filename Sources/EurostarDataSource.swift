@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// WiFi Eurostar (transmanche et continental ex-Thalys) : portail Icomera « Internet Ombord ».
@@ -21,8 +22,8 @@ final class EurostarDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -43,6 +44,7 @@ final class EurostarDataSource: TrainDataSource {
             headerSubtitle: snap.rameNumber.map { "Rame \($0)" } ?? snap.systemName,
             speedKmh: snap.speedKmh
         )
+        state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
 
         if let used = snap.dataUsedMB, let limit = snap.dataLimitMB, limit > 0 {
             state.dataConsumedMB = used
@@ -81,7 +83,7 @@ final class EurostarDataSource: TrainDataSource {
         if let heading = snap.headingDeg, snap.speedKmh > 0 {
             rows.append(MetricRow(id: "heading",
                                   symbol: "location.north.fill",
-                                  text: "Cap \(EurostarDataSource.cardinal(heading)) (\(Int(heading.rounded()))°)",
+                                  text: "Cap \(Compass.cardinal(heading)) (\(Int(heading.rounded()))°)",
                                   span: .half))
         }
         if let uplink = uplinkText(snap) {
@@ -145,14 +147,5 @@ final class EurostarDataSource: TrainDataSource {
         if snap.uplinkLinksTotal > 0 { parts.append("\(snap.uplinkLinksUp)/\(snap.uplinkLinksTotal) liens") }
         if let rssi = snap.uplinkRSSI { parts.append("\(rssi) dBm") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// Cap en degrés → point cardinal français (16 secteurs, « O » pour ouest).
-    private static func cardinal(_ degrees: Double) -> String {
-        let names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-                     "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
-        let normalized = degrees.truncatingRemainder(dividingBy: 360)
-        let positive = normalized < 0 ? normalized + 360 : normalized
-        return names[Int((positive / 22.5).rounded()) % names.count]
     }
 }

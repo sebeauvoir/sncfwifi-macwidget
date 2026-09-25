@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreLocation
 
 /// Modèle de vue exposé au panneau SwiftUI. Purement des données, aucune logique AppKit.
 
@@ -23,6 +24,8 @@ struct StopRow: Identifiable {
     var platform: String?
     /// Voie initialement prévue, pour signaler un changement.
     var scheduledPlatform: String?
+    /// Position de la gare, pour la carte. `nil` quand le réseau ne la publie pas.
+    var coordinate: CLLocationCoordinate2D?
 
     /// Vrai quand la voie annoncée n'est plus celle prévue.
     var platformChanged: Bool {
@@ -56,6 +59,16 @@ struct MetricRow: Identifiable {
     static func footnote(_ text: String) -> MetricRow {
         MetricRow(id: "footnote", symbol: "", text: text, isFootnote: true)
     }
+}
+
+/// Tuile de la section « En vrac » : petit libellé au-dessus, valeur en gras.
+struct ExtraMetric: Identifiable {
+    let id: String
+    let symbol: String
+    let label: String
+    let value: String
+    /// Pleine largeur, valeur sur plusieurs lignes (durées d'arrêt).
+    var wide = false
 }
 
 /// Carte du bar-restaurant, chargée à la demande et non à chaque cycle.
@@ -112,6 +125,16 @@ struct TrainViewState {
     var globalProgress: Double = 0
 
     var speedKmh: Int = 0
+    /// Position du train, pour la carte. Relue chaque seconde avec la vitesse.
+    var trainCoordinate: CLLocationCoordinate2D?
+    /// Tracé réel de la ligne, quand le réseau le publie (chargé une fois par trajet).
+    var routePath: [CLLocationCoordinate2D] = []
+    /// Kilomètres restants jusqu'à la gare d'arrivée choisie. Posés par la source quand l'API
+    /// les donne (ICE), recalculés chaque seconde par le contrôleur le long du tracé.
+    var remainingKm: Double?
+    /// Positions relevées depuis le lancement de l'app sur ce trajet : à défaut de tracé
+    /// publié, la portion parcourue suit au moins les voies réellement empruntées.
+    var trail: [CLLocationCoordinate2D] = []
 
     var wifiQuality: Int?      // 0…5
     var wifiDevices: Int?
@@ -124,6 +147,8 @@ struct TrainViewState {
     var dataResetTime: String? // "HH:mm"
 
     var metrics: [MetricRow] = []
+    /// Données brutes supplémentaires, en vrac en bas du panneau (altitude, cap, débit…).
+    var extraMetrics: [ExtraMetric] = []
 
     var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
@@ -153,6 +178,28 @@ enum DataVolume {
     }
 }
 
+/// Cap en degrés → point cardinal français (16 secteurs, « O » pour ouest).
+enum Compass {
+    static func cardinal(_ degrees: Double) -> String {
+        let names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                     "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
+        let normalized = degrees.truncatingRemainder(dividingBy: 360)
+        let positive = normalized < 0 ? normalized + 360 : normalized
+        return names[Int((positive / 22.5).rounded()) % names.count]
+    }
+}
+
+/// Mise en forme des distances, partagée entre le panneau et la barre des menus.
+enum DistanceFormat {
+    /// « 142 », « 8,4 » : une décimale sous 10 km, séparateur de la locale.
+    static func km(_ value: Double) -> String {
+        let value = max(0, value)
+        return value < 10
+            ? String(format: "%.1f", locale: .current, value)
+            : String(Int(value.rounded()))
+    }
+}
+
 enum PanelState {
     case loading
     case notConnected(demoMode: Bool)
@@ -168,7 +215,11 @@ final class TrainStore: ObservableObject {
     @Published var route: PanelRoute = .main
     @Published var menu: MenuState = .idle
     /// Doit refléter le Timer du contrôleur.
-    let refreshInterval: TimeInterval = 30
+    let refreshInterval: TimeInterval = TrainStore.fullRefreshInterval
+
+    /// Cycle complet (desserte, retard, WiFi, en vrac). Vitesse et position sont, elles,
+    /// relues chaque seconde entre deux cycles.
+    static let fullRefreshInterval: TimeInterval = 5
 
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}

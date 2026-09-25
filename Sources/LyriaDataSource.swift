@@ -26,8 +26,12 @@ final class LyriaDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
+    }
+
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        client.fetchRoutePath(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -57,7 +61,8 @@ final class LyriaDataSource: TrainDataSource {
                 realTime: stop.arrival.map(APIValue.time) ?? "",
                 arrivalDate: stop.arrival,
                 delayMin: stop.delayMin,
-                status: status
+                status: status,
+                coordinate: LiveFix.coordinate(latitude: stop.latitude, longitude: stop.longitude)
             )
         }
 
@@ -89,6 +94,7 @@ final class LyriaDataSource: TrainDataSource {
         state.delayMin = delayMin
         state.selectedArrivalId = arrivalStop?.id
         state.metrics = metrics(for: snap)
+        state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
 
         let badge = StatusBadge(
             text: LyriaDataSource.shortStationName(destination),

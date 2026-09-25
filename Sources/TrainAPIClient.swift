@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// Appelle les endpoints de l'API WiFi SNCF en parallèle.
@@ -9,6 +10,16 @@ final class TrainAPIClient {
     private let barURL        = URL(string: "https://wifi.sncf/router/api/bar/attendance")!
     private let statsURL      = URL(string: "https://wifi.sncf/router/api/connection/statistics")!
     private let statusURL     = URL(string: "https://wifi.sncf/router/api/connection/status")!
+    /// Tracé des voies du trajet, en GeoJSON `LineString` (origine → terminus), ~40 Ko.
+    private let graphURL      = URL(string: "https://wifi.sncf/router/api/train/graph")!
+    /// Part de CO₂ évitée par rapport à la voiture, par couple origine → destination (codes UIC).
+    private let co2URL        = URL(string: "https://wifi.sncf/co2/meta.json")!
+
+    /// Table CO₂ du portail, chargée une fois : elle ne dépend pas du moment.
+    private(set) var co2Table: [[String: Any]]?
+    /// Dernière réponse de `details` : elle seule porte la rame (`trainId`) et les codes UIC
+    /// du trajet, que `progress` n'a pas.
+    private(set) var lastDetails: [String: Any]?
     
     private let timeout: TimeInterval = 5
     /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
@@ -24,8 +35,8 @@ final class TrainAPIClient {
         fetch(url: gpsURL) { completion($0 != nil) }
     }
 
-    /// Vitesse seule, depuis `train/gps` (en m/s).
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+    /// Vitesse (en m/s) et position, depuis `train/gps`.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         let url = MockTrainData.shared.isEnabled
             ? MockTrainData.shared.url(path: "/router/api/train/gps")
             : gpsURL
@@ -34,7 +45,30 @@ final class TrainAPIClient {
             return
         }
         APIBody.fetch(url: url, timeout: speedTimeout, ignoreCache: true) { gps in
-            completion(APIValue.double(gps?["speed"]).map { Int($0 * 3.6) })
+            guard let speed = APIValue.double(gps?["speed"]) else {
+                completion(nil)
+                return
+            }
+            let coordinate = LiveFix.coordinate(
+                latitude: APIValue.double(gps?["latitude"]) ?? APIValue.double(gps?["lat"]),
+                longitude: APIValue.double(gps?["longitude"]) ?? APIValue.double(gps?["lon"]) ?? APIValue.double(gps?["lng"])
+            )
+            completion(LiveFix(speedKmh: Int(speed * 3.6), coordinate: coordinate))
+        }
+    }
+
+    /// Tracé des voies, chargé une fois par trajet pour la carte.
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        let url = MockTrainData.shared.isEnabled
+            ? MockTrainData.shared.url(path: "/router/api/train/graph")
+            : graphURL
+        guard let url else {
+            completion(nil)
+            return
+        }
+        APIBody.fetch(url: url, timeout: 15) { json in
+            let path = GeoJSONPath.coordinates(from: json)
+            completion(path.count > 1 ? path : nil)
         }
     }
 
@@ -79,7 +113,15 @@ final class TrainAPIClient {
         group.enter()
         fetch(url: statusURL) { statusData = $0; group.leave() }
 
+        var co2Data: [[String: Any]]?
+        if co2Table == nil {
+            group.enter()
+            APIBody.fetchArray(url: co2URL, timeout: timeout) { co2Data = $0; group.leave() }
+        }
+
         group.notify(queue: .main) {
+            if let co2Data { self.co2Table = co2Data }
+            if let detailsData { self.lastDetails = detailsData }
             completion(gpsData, progressData ?? detailsData, barData, statsData, statusData)
         }
     }

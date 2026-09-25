@@ -15,7 +15,7 @@ la jauge de progression du trajet en dessous.
 - Les sessions cloud tournent sous Linux, sans compilateur Swift : impossible de lancer
   `./build.sh` sur place. La compilation se vérifie via GitHub Actions (build de test, ci-dessous).
 - Tout nouveau fichier Swift doit être ajouté à `SWIFT_SOURCES` dans `build.sh` (liste explicite).
-- Un nouveau réseau doit implémenter `TrainDataSource`, y compris `fetchSpeed` (pas de valeur
+- Un nouveau réseau doit implémenter `TrainDataSource`, y compris `fetchLive` (pas de valeur
   par défaut) : voir « Ajouter un réseau » dans le README.
 
 ## Processus de livraison
@@ -28,9 +28,10 @@ tag ni release.
 Pour chaque modification :
 
 1. Travailler sur une branche, jamais directement sur `main`.
-2. Pour vérifier que le code compile, ou pour que l'utilisateur teste l'app, lancer le workflow
-   `build.yml` sur la branche (`workflow_dispatch`) et donner le lien du run. L'artefact se
-   télécharge depuis la page du run.
+2. **Toujours demander à l'utilisateur avant de lancer un build**, même de test : il a souvent
+   de nouvelles idées entre-temps. Une fois d'accord, lancer le workflow `build.yml` sur la
+   branche (`workflow_dispatch`) et donner le lien direct de l'artefact
+   (`actions/runs/<run>/artifacts/<id>`).
 3. Ouvrir une pull request vers `main`.
 4. Fusionner la pull request seulement quand l'utilisateur le demande, en méthode `rebase`
    (historique linéaire, changelog propre). GitHub supprime alors la branche tout seul
@@ -46,3 +47,11 @@ Pour chaque modification :
   sinon donner à l'utilisateur les liens et commandes pour le faire lui-même.
 - Si les workflows semblent absents (404 au déclenchement), vérifier qu'Actions est activé
   dans l'onglet Actions du dépôt.
+
+## Pistes pour plus tard
+
+- **Socket.IO du WiFi SNCF** : le portail reçoit ses données en temps réel sur
+  `wss://wifi.sncf/socket.io/` (namespace `/router/api/pepita`). Événements relevés dans un HAR
+  à bord : `gps` (≈ 1 Hz, même contenu que `train/gps`), `connected_devices`, `trainDetails`,
+  `trainProgress`, `trainGraph`, `modulesConfiguration`. S'y abonner remplacerait la relecture
+  de la vitesse chaque seconde et le cycle complet (aujourd'hui toutes les 5 s).

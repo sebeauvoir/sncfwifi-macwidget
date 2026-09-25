@@ -13,7 +13,10 @@ final class SNCFDataSource: TrainDataSource {
         ssids: ["_sncf_wifi_inoui", "ouifi", "sncf_wifi_intercites", "wifi_sncf"],
         accentHex: 0x7D206F,
         features: [.journey, .speed, .wifiQuality, .dataQuota],
-        apiHost: "wifi.sncf"
+        apiHost: "wifi.sncf",
+        // Relevé dans la page wifi.sncf/fr/journey : style MapLibre et tuiles PMTiles
+        // (`maps/europe.pmtiles`, `maps/osm_railways.pmtiles`) servis par le train.
+        mapTilesOrigin: URL(string: "https://wifi.sncf/")
     )
 
     private let client = TrainAPIClient()
@@ -22,8 +25,12 @@ final class SNCFDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        client.fetchSpeed(completion: completion)
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        client.fetchLive(completion: completion)
+    }
+
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        client.fetchRoutePath(completion: completion)
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
@@ -34,6 +41,16 @@ final class SNCFDataSource: TrainDataSource {
             }
             completion(self.makeSnapshot(gps: gps, details: details, bar: bar, stats: stats, status: status))
         }
+    }
+
+    /// Identifiant d'un arrêt, le même pour la timeline, le sélecteur d'arrivée et la carte.
+    /// L'API ne publie pas d'`id` mais un code gare (`FRVLA`) ; le libellé sert de dernier
+    /// recours, suffixé de la position pour rester unique.
+    static func stopId(_ stop: [String: Any], index: Int? = nil) -> String {
+        if let id = stop["id"] as? String, !id.isEmpty { return id }
+        if let code = stop["code"] as? String, !code.isEmpty { return code }
+        let label = (stop["label"] as? String) ?? "Gare"
+        return index.map { "\(label)-\($0)" } ?? label
     }
 
     func makeSnapshot(gps: [String: Any]?,
@@ -161,7 +178,7 @@ final class SNCFDataSource: TrainDataSource {
             // Gare d'arrivée cible : celle choisie dans le panneau, si elle est encore devant.
             var arrivalStationIndex = allStops.count - 1
             if let savedId = UserDefaults.standard.string(forKey: "arrivalStationId"),
-               let idx = allStops.firstIndex(where: { ($0["id"] as? String) == savedId || ($0["label"] as? String) == savedId }),
+               let idx = allStops.firstIndex(where: { SNCFDataSource.stopId($0) == savedId || ($0["label"] as? String) == savedId }),
                idx >= nextStopIndex {
                 arrivalStationIndex = idx
             }
@@ -228,15 +245,20 @@ final class SNCFDataSource: TrainDataSource {
             let delay = (stop["delay"] as? Int) ?? 0
             let status: StopStatus = i < nextStopIndex ? .passed : (i == nextStopIndex ? .current : .upcoming)
             return StopRow(
-                id: (stop["id"] as? String) ?? "\(lbl)-\(i)",
+                id: SNCFDataSource.stopId(stop, index: i),
                 label: lbl,
                 theoricTime: APIValue.time(stop["theoricDate"] as? String) ?? "",
                 realTime: APIValue.time(stop["realDate"] as? String) ?? "",
                 arrivalDate: APIValue.date(stop["realDate"] as? String ?? stop["theoricDate"] as? String),
                 delayMin: delay,
-                status: status
+                status: status,
+                coordinate: (stop["coordinates"] as? [String: Any]).flatMap {
+                    LiveFix.coordinate(latitude: APIValue.double($0["latitude"]),
+                                       longitude: APIValue.double($0["longitude"]))
+                }
             )
         }
+        viewState.trainCoordinate = LiveFix.coordinate(latitude: currentLat, longitude: currentLon)
 
         // Qualité WiFi
         if let stats = stats {
@@ -264,11 +286,33 @@ final class SNCFDataSource: TrainDataSource {
         // Sélecteur de gare d'arrivée
         viewState.arrivalOptions = allStops.enumerated().map { (i, stop) -> ArrivalOption in
             let lbl = (stop["label"] as? String) ?? "Gare \(i)"
-            return ArrivalOption(id: (stop["id"] as? String) ?? lbl, label: lbl)
+            return ArrivalOption(id: SNCFDataSource.stopId(stop, index: i), label: lbl)
         }
+        // Un réglage enregistré avant le passage au code gare porte le libellé : il reste reconnu.
         let savedId = UserDefaults.standard.string(forKey: "arrivalStationId")
-        let optionIds = viewState.arrivalOptions.map { $0.id }
-        viewState.selectedArrivalId = savedId.flatMap { optionIds.contains($0) ? $0 : nil } ?? optionIds.last
+        viewState.selectedArrivalId = savedId
+            .flatMap { saved in viewState.arrivalOptions.first { $0.id == saved || $0.label == saved }?.id }
+            ?? viewState.arrivalOptions.last?.id
+
+        // Kilomètres restants jusqu'à la gare d'arrivée, tels que l'API les donne : chaque
+        // arrêt porte la progression du tronçon qui le relie au suivant
+        // (`progress.remainingDistance`, en mètres), on somme les tronçons jusqu'à l'arrivée.
+        // Pour la prochaine gare, c'est le chiffre de « Suivi du trajet » sur le portail.
+        if let arrivalIndex = journey?.selectedArrivalIndex, arrivalIndex > 0 {
+            let segments = allStops[..<arrivalIndex].compactMap { stop in
+                (stop["progress"] as? [String: Any]).flatMap { APIValue.double($0["remainingDistance"]) }
+            }
+            if segments.count == arrivalIndex {
+                viewState.remainingKm = segments.reduce(0, +) / 1000
+            }
+        }
+
+        viewState.extraMetrics = extraMetrics(gps: gps,
+                                              stops: allStops,
+                                              arrivalIndex: journey?.selectedArrivalIndex,
+                                              speedKmh: speed,
+                                              bar: bar,
+                                              status: status)
 
 
         var payloads: [String: Any] = [:]
@@ -282,6 +326,112 @@ final class SNCFDataSource: TrainDataSource {
     }
 
     /// Noms de gares raccourcis pour tenir dans la pastille de la barre de menus.
+    // MARK: - Données en vrac
+
+    /// Tout ce que l'API donne en plus, en vrac en bas du panneau.
+    private func extraMetrics(gps: [String: Any]?,
+                              stops: [[String: Any]],
+                              arrivalIndex: Int?,
+                              speedKmh: Int,
+                              bar: [String: Any]?,
+                              status: [String: Any]?) -> [ExtraMetric] {
+        var tiles: [ExtraMetric] = []
+
+        if let altitude = APIValue.double(gps?["altitude"]) {
+            tiles.append(ExtraMetric(id: "altitude", symbol: "mountain.2",
+                                     label: "Altitude", value: "\(Int(altitude.rounded())) m"))
+        }
+        // Le cap n'a pas de sens à l'arrêt : le GPS dérive.
+        if let heading = APIValue.double(gps?["heading"]), speedKmh > 0 {
+            tiles.append(ExtraMetric(id: "heading", symbol: "location.north.fill",
+                                     label: "Cap", value: "\(Compass.cardinal(heading)) · \(Int(heading.rounded()))°"))
+        }
+
+        // Chaque arrêt porte la progression du tronçon qui le relie au suivant.
+        let travelled = stops.dropLast().compactMap { stop in
+            (stop["progress"] as? [String: Any]).flatMap { APIValue.double($0["traveledDistance"]) }
+        }.reduce(0, +)
+        if travelled > 0 {
+            tiles.append(ExtraMetric(id: "travelled", symbol: "point.topleft.down.curvedto.point.bottomright.up",
+                                     label: "Parcouru", value: "\(DistanceFormat.km(travelled / 1000)) km"))
+        }
+        if let first = stops.first,
+           let departure = APIValue.date(first["realDate"] as? String ?? first["theoricDate"] as? String) {
+            let elapsed = Date().timeIntervalSince(departure)
+            // Trop tôt après le départ, la moyenne ne veut rien dire.
+            if elapsed > 180, travelled > 1000 {
+                tiles.append(ExtraMetric(id: "average", symbol: "speedometer",
+                                         label: "Vitesse moyenne", value: "\(Int((travelled / elapsed * 3.6).rounded())) km/h"))
+            }
+        }
+
+        if let arrivalIndex, stops.indices.contains(arrivalIndex) {
+            let arrival = stops[arrivalIndex]
+            if let date = APIValue.date(arrival["realDate"] as? String ?? arrival["theoricDate"] as? String),
+               date > Date() {
+                let label = shortStationName((arrival["label"] as? String) ?? "")
+                tiles.append(ExtraMetric(id: "time-left", symbol: "clock",
+                                         label: "Arrivée à \(label)", value: "dans \(Self.duration(date.timeIntervalSinceNow))"))
+            }
+        }
+
+        // Unité non documentée : 100 000 relevé à bord, lu comme des kbit/s.
+        if let bandwidth = APIValue.double(status?["granted_bandwidth"]), bandwidth > 0 {
+            tiles.append(ExtraMetric(id: "bandwidth", symbol: "arrow.down.circle",
+                                     label: "Débit accordé", value: "\(Int((bandwidth / 1000).rounded())) Mbit/s"))
+        }
+        if let empty = bar?["isBarQueueEmpty"] as? Bool {
+            tiles.append(ExtraMetric(id: "bar", symbol: "cup.and.saucer.fill",
+                                     label: "Bar", value: empty ? "Pas d'attente" : "File d'attente"))
+        }
+        if let co2 = co2Percent() {
+            tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
+                                     label: "CO₂ vs voiture", value: "−\(co2) %"))
+        }
+        if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
+            tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
+        }
+
+        // Durées d'arrêt annoncées, gares intermédiaires seulement.
+        let dwells = stops.dropFirst().dropLast().compactMap { stop -> String? in
+            let minutes = APIValue.int(stop["duration"])
+            guard minutes > 0, let label = stop["label"] as? String else { return nil }
+            return "\(shortStationName(label)) \(minutes) min"
+        }
+        if !dwells.isEmpty {
+            tiles.append(ExtraMetric(id: "dwell", symbol: "stopwatch", label: "Durées d'arrêt",
+                                     value: dwells.joined(separator: " · "), wide: true))
+        }
+        return tiles
+    }
+
+    /// Part de CO₂ évitée par rapport à la voiture (« 97 »), d'après la table du portail et les
+    /// codes UIC du trajet. Le portail cherche le couple dans les deux sens.
+    private func co2Percent() -> String? {
+        guard let codes = client.lastDetails?["stationUicCodes"] as? [String: Any],
+              let departure = codes["departure"] as? String,
+              let arrival = codes["arrival"] as? String,
+              let table = client.co2Table
+        else { return nil }
+        let entry = table.first { row in
+            let origin = row["origine_uic"] as? String
+            let destination = row["destination_uic"] as? String
+            return (origin == departure && destination == arrival) || (origin == arrival && destination == departure)
+        }
+        guard let value = (entry?["co2"] as? String)?.replacingOccurrences(of: "%", with: ""),
+              !value.isEmpty
+        else { return nil }
+        return value.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// « 1h02 », « 45 min ».
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        guard minutes >= 60 else { return "\(max(1, minutes)) min" }
+        let rest = minutes % 60
+        return rest > 0 ? "\(minutes / 60)h\(String(format: "%02d", rest))" : "\(minutes / 60)h"
+    }
+
     private func shortStationName(_ name: String) -> String {
         if let short = SNCFDataSource.shortNames[name] { return short }
         if name.count <= 15 { return name }

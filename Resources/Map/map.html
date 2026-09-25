@@ -1,0 +1,286 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>/*MAPLIBRE_CSS*/</style>
+<style>
+  html, body, #map { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  .maplibregl-ctrl-logo { display: none !important; }
+  /* Échelle et mentions légales, comme sur wifi.sncf/fr/journey : discrètes, lisibles,
+     sur un voile clair qui les détache du fond. */
+  .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { pointer-events: auto; }
+  .maplibregl-ctrl-bottom-left .maplibregl-ctrl { margin: 0 0 5px 6px; }
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl { margin: 0 5px 5px 0; }
+  .maplibregl-ctrl-scale {
+    font: 500 8px -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #3a3a3c; background: rgba(255, 255, 255, .72);
+    border: 1.5px solid #3a3a3c; border-top: none; border-radius: 0 0 2px 2px;
+    padding: 0 3px; line-height: 10px; box-sizing: border-box;
+  }
+  .maplibregl-ctrl-attrib.maplibregl-compact, .maplibregl-ctrl-attrib {
+    font: 8px -apple-system, BlinkMacSystemFont, sans-serif;
+    background: rgba(255, 255, 255, .72); border-radius: 3px;
+    padding: 1px 4px; min-height: 0; line-height: 11px; color: #3a3a3c;
+  }
+  .maplibregl-ctrl-attrib-button { display: none !important; }
+  .maplibregl-ctrl-attrib-inner { display: block !important; }
+  .maplibregl-ctrl-attrib a { color: #3a3a3c; text-decoration: none; }
+  .maplibregl-ctrl-attrib a:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) {
+    .maplibregl-ctrl-scale { color: #e5e5ea; border-color: #e5e5ea; background: rgba(28, 28, 30, .72); }
+    .maplibregl-ctrl-attrib { background: rgba(28, 28, 30, .72); }
+    .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib a { color: #e5e5ea; }
+  }
+  .badge {
+    box-sizing: border-box; border-radius: 50%; border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .badge svg { width: 58%; height: 58%; fill: #fff; }
+</style>
+<script>/*MAPLIBRE_JS*/</script>
+<script>/*PMTILES_JS*/</script>
+</head>
+<body>
+<div id="map"></div>
+<script>
+"use strict";
+
+// Pictogrammes des pastilles : bâtiment de gare, face avant d'un train.
+const STATION = '<svg viewBox="0 0 24 24"><path d="M12 2 2 7v2h20V7zM5 11v7h3v-7zm5.5 0v7h3v-7zM16 11v7h3v-7zM2 20v2h20v-2z"/></svg>';
+const TRAIN = '<svg viewBox="0 0 24 24"><path d="M12 2C8 2 4 2.5 4 6v9.5A3.5 3.5 0 0 0 7.5 19L6 20.5v.5h2.2l2-2h3.6l2 2H18v-.5L16.5 19a3.5 3.5 0 0 0 3.5-3.5V6c0-3.5-4-4-8-4zM7.5 17a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3.5-7H6V6h5zm2 0V6h5v4zm3.5 7a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>';
+const PASSED = "#8e8e93";
+// Un zoom ou un déplacement à la main suspend le suivi une minute.
+const USER_PAUSE_MS = 60000;
+
+const post = (message) => {
+  try { window.webkit.messageHandlers.map.postMessage(message); } catch (e) {}
+};
+
+let map = null;
+let loaded = false;
+let pending = null;
+let tint = "#7D206F";
+let travelledBase = [];
+let remainingBase = [];
+let train = null;
+let trainMarker = null;
+let stopMarkers = [];
+let stopsKey = "";
+let framed = null;
+let userMovedAt = 0;
+// « overview » : train → gare d'arrivée, zoom automatique. « follow » : train au centre,
+// carte fixe, zoom seul.
+let mode = "overview";
+let followZoom = 11;
+let followPlaced = false;
+try { followZoom = Number(localStorage.getItem("followZoom")) || followZoom; } catch (e) {}
+
+// Le style du portail vise « http://localhost:8000 » : le portail réécrit ces adresses vers
+// sa propre origine, on fait de même.
+async function loadStyle() {
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const names = dark ? ["style-dark", "style-light"] : ["style-light"];
+  for (const name of names) {
+    try {
+      const response = await fetch(`/karto/${name}.json`, { cache: "no-cache" });
+      if (!response.ok) continue;
+      const text = await response.text();
+      return JSON.parse(text.replace(/https?:\/\/localhost:8000/g, location.origin));
+    } catch (e) {}
+  }
+  // Style introuvable : fond uni, tracé et pastilles restent lisibles.
+  post({ type: "style-missing" });
+  return {
+    version: 8, sources: {},
+    layers: [{ id: "background", type: "background",
+               paint: { "background-color": dark ? "#2c2c2e" : "#e9eef2" } }],
+  };
+}
+
+async function start() {
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+
+  map = new maplibregl.Map({
+    container: "map",
+    style: await loadStyle(),
+    center: [2.35, 46.6],
+    zoom: 4.5,
+    attributionControl: false,
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
+    fadeDuration: 0,
+  });
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+
+  // Mêmes mentions que le portail. Le lien s'ouvre dans le navigateur (voir TrainMapView).
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 64, unit: "metric" }), "bottom-left");
+  map.addControl(new maplibregl.AttributionControl({
+    compact: false,
+    customAttribution: [
+      "© TesmoMaps",
+      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>',
+    ],
+  }), "bottom-right");
+
+  map.on("movestart", (event) => {
+    // Seuls les gestes portent un événement d'origine ; les recadrages du suivi, non.
+    if (event.originalEvent) userMovedAt = Date.now();
+  });
+  map.on("zoomend", () => {
+    if (mode !== "follow") return;
+    followZoom = map.getZoom();
+    try { localStorage.setItem("followZoom", String(followZoom)); } catch (e) {}
+    // Un zoom pendant le glissement l'interrompt à mi-course : on remet le train au centre.
+    if (train) map.jumpTo({ center: train });
+  });
+  map.on("error", (event) => post({ type: "error", message: String(event.error && event.error.message) }));
+
+  map.on("load", () => {
+    for (const id of ["remaining", "travelled"]) {
+      map.addSource(id, { type: "geojson", data: line([]) });
+      map.addLayer({
+        id, type: "line", source: id,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-color": tint, "line-width": 4, "line-opacity": id === "travelled" ? 1 : 0.4 },
+      });
+    }
+    loaded = true;
+    if (pending) update(pending);
+    pending = null;
+  });
+  post({ type: "ready" });
+}
+
+function line(coordinates) {
+  return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } };
+}
+
+function badge(svg, size, color, title) {
+  const element = document.createElement("div");
+  element.className = "badge";
+  element.style.width = element.style.height = `${size}px`;
+  element.style.background = color;
+  element.innerHTML = svg;
+  if (title) element.title = title;
+  return element;
+}
+
+// Appelée par Swift à chaque rafraîchissement. Les tracés ne sont envoyés que s'ils changent ;
+// le train, lui, arrive chaque seconde et prolonge les deux tracés.
+window.update = function (payload) {
+  if (!loaded) { pending = Object.assign(pending || {}, payload); return; }
+
+  if (payload.tint && payload.tint !== tint) {
+    tint = payload.tint;
+    for (const id of ["remaining", "travelled"]) map.setPaintProperty(id, "line-color", tint);
+    stopsKey = "";
+    if (trainMarker) { trainMarker.remove(); trainMarker = null; }
+  }
+  if (payload.travelled) travelledBase = payload.travelled;
+  if (payload.remaining) remainingBase = payload.remaining;
+  train = payload.train || null;
+
+  const head = train ? [train] : [];
+  map.getSource("travelled").setData(line(travelledBase.concat(head)));
+  map.getSource("remaining").setData(line(head.concat(remainingBase)));
+
+  if (payload.stopsKey !== undefined && payload.stopsKey !== stopsKey) {
+    stopsKey = payload.stopsKey;
+    stopMarkers.forEach((marker) => marker.remove());
+    stopMarkers = payload.stops.map((stop) => {
+      const size = stop.arrival ? 26 : (stop.status === "passed" ? 16 : 20);
+      const color = stop.status === "passed" ? PASSED : tint;
+      return new maplibregl.Marker({ element: badge(STATION, size, color, stop.label) })
+        .setLngLat(stop.c).addTo(map);
+    });
+  }
+
+  if (train) {
+    if (!trainMarker) {
+      const element = badge(TRAIN, 30, tint);
+      element.style.zIndex = "2";
+      trainMarker = new maplibregl.Marker({ element }).setLngLat(train).addTo(map);
+    } else {
+      trainMarker.setLngLat(train);
+    }
+  } else if (trainMarker) {
+    trainMarker.remove();
+    trainMarker = null;
+  }
+
+  if (payload.mode) applyMode(payload.mode);
+  if (mode === "follow") {
+    center();
+  } else if (payload.bounds) {
+    follow(payload.bounds);
+  }
+};
+
+// Suivi : ni déplacement ni zoom ailleurs qu'au centre, où se tient le train.
+function applyMode(next) {
+  if (next === mode) return;
+  mode = next;
+  if (mode === "follow") {
+    map.dragPan.disable();
+    map.boxZoom.disable();
+    map.doubleClickZoom.disable();
+    map.keyboard.disable();
+    map.scrollZoom.enable({ around: "center" });
+    map.touchZoomRotate.enable({ around: "center" });
+    followPlaced = false;
+  } else {
+    map.dragPan.enable();
+    map.boxZoom.enable();
+    map.doubleClickZoom.enable();
+    map.keyboard.enable();
+    map.scrollZoom.enable();
+    map.touchZoomRotate.enable();
+    // Retour au cadrage train → gare d'arrivée, sans attendre la fin d'une pause.
+    framed = null;
+    userMovedAt = 0;
+  }
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+}
+
+// Garde le train au centre. Glissement linéaire d'une seconde, au rythme des positions :
+// la carte défile en continu sous le train.
+function center() {
+  if (!train) return;
+  if (!followPlaced) {
+    followPlaced = true;
+    map.jumpTo({ center: train, zoom: followZoom });
+    return;
+  }
+  const here = map.project(map.getCenter());
+  const there = map.project(train);
+  if (Math.hypot(here.x - there.x, here.y - there.y) < 0.5) return;
+  map.easeTo({ center: train, duration: 1000, easing: (t) => t });
+}
+
+// Cadre train → gare d'arrivée, sauf pendant la pause qui suit un geste. Un écart de moins de
+// 5 % du cadre ne vaut pas de bouger la carte.
+function follow(bounds) {
+  if (Date.now() - userMovedAt < USER_PAUSE_MS) return;
+  if (framed && isClose(framed, bounds)) return;
+  const animate = framed !== null;
+  framed = bounds;
+  // Marge du bas plus large : l'échelle et les mentions y sont.
+  map.fitBounds(bounds, { padding: { top: 26, left: 26, right: 26, bottom: 36 }, duration: animate ? 800 : 0 });
+}
+
+function isClose(a, b) {
+  const size = Math.max(a[1][0] - a[0][0], a[1][1] - a[0][1], 1e-6);
+  const tolerance = 0.05 * size;
+  return [0, 1].every((corner) => [0, 1].every((axis) =>
+    Math.abs(a[corner][axis] - b[corner][axis]) < tolerance));
+}
+
+start().catch((error) => post({ type: "error", message: String(error) }));
+</script>
+</body>
+</html>

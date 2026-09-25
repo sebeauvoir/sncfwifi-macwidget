@@ -20,14 +20,31 @@ qui est disponible dans chaque train.
 
 ## Le widget 🖥️
 
-**Pastille** — la vitesse du train, en permanence et sur tous les réseaux (`278 km/h`,
-`0 km/h` à l'arrêt), avec la jauge de progression du trajet en dessous quand le réseau
-expose une desserte (SNCF, ICE, Lyria). Elle est relue chaque seconde via un seul endpoint léger ; le reste des
-données est rafraîchi toutes les 30 s.
+**Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
+kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en lettres empilées à droite des valeurs (« km » sur « h », en fraction), jauge
+de progression du trajet en dessous quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
+kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` des tronçons jusqu'à
+l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
+seconde de la distance parcourue d'après le GPS entre deux lectures ; à défaut, le long du tracé
+publié (Lyria) ou de gare en gare. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+données est rafraîchi toutes les 5 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
-**Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
-horaires théoriques barrés en cas de retard ; puis les métriques propres au réseau. Un second
+**Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte complète avec les
+horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
+`wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
+relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
+du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
+main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
+et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. En bas du panneau, une section
+**En vrac** (WiFi SNCF) rassemble le reste de ce que l'API expose : altitude, cap, distance
+parcourue, vitesse moyenne, temps restant, débit accordé, attente au bar, CO₂ évité par rapport à
+la voiture, durées d'arrêt, numéro de rame. Le tracé suit les voies quand le réseau le
+publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
+de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
+du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
+autres réseaux n'embarquant pas de tuiles, leur carte utilise le fond Apple, chargé depuis
+Internet ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
 **Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
@@ -74,6 +91,9 @@ SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
 | `GET /router/api/connection/statistics` | qualité WiFi (0…5), appareils connectés |
 | `GET /router/api/connection/status` | données consommées / restantes, prochaine remise à zéro |
 | `GET /router/api/bar/attendance` | affluence au bar — lue et présente dans le JSON de debug, pas encore affichée |
+| `GET /co2/meta.json` | part de CO₂ évitée par rapport à la voiture, par couple de gares (codes UIC de `details.stationUicCodes`), chargée une fois |
+| `GET /router/api/train/graph` | tracé des voies du trajet, GeoJSON `LineString` d'origine en terminus (~40 Ko), chargé **une fois par trajet** pour la carte |
+| `GET /karto/style-light.json`, `/maps/*.pmtiles`, `/maps/fonts/…`, `/maps/sprites/…` | fond de carte hors ligne du portail (style MapLibre, tuiles vectorielles PMTiles de l'Europe et des voies ferrées) — voir `Resources/Map/README.md` |
 
 ### 🇪🇺 WiFi Eurostar — transmanche et continental (ex-Thalys)
 
@@ -180,10 +200,10 @@ SSID reconnu : `_WIFI_LYRIA`
 | `GET https://wifi.tgv-lyria.com/api/train/gps/position/` | vitesse (**en m/s**), latitude, longitude, altitude |
 | `GET https://wifi.tgv-lyria.com/api/wifi/status/` | qualité WiFi (0…5), appareils connectés |
 | `GET https://wifi.tgv-lyria.com/api/transport/current/` | numéro de rame — une chaîne JSON nue (`"4729"`), pas un objet |
+| `GET https://wifi.tgv-lyria.com/api/travel/path/` | tracé GeoJSON du parcours (~55 Ko), chargé **une fois par trajet** pour la carte |
 
-Deux autres routes existent et ne sont pas consommées : `/api/travel/position/` (mêmes
-coordonnées, parfois rejouées sous l'id `gps-fallback`) et `/api/travel/path/` (tracé GeoJSON
-du parcours, ~55 Ko — trop lourd pour un cycle de 30 s).
+`/api/travel/position/` existe aussi et n'est pas consommé : mêmes coordonnées, parfois rejouées
+sous l'id `gps-fallback`.
 
 Comme les horaires ne sont pas réactualisés (voir ci-dessous), **le prochain arrêt et la jauge de
 progression sont déduits de la position GPS** et non des heures annoncées : la position est
@@ -301,15 +321,17 @@ final class MonReseauDataSource: TrainDataSource {
         // Un seul appel : « suis-je à bord ? »
     }
 
-    func fetchSpeed(completion: @escaping (Int?) -> Void) {
-        // Vitesse seule en km/h, via un unique endpoint léger : la pastille la
-        // relit chaque seconde entre deux cycles complets. nil si pas de réponse.
+    func fetchLive(completion: @escaping (LiveFix?) -> Void) {
+        // Vitesse en km/h et position, via un unique endpoint léger : la pastille
+        // et la carte les relisent chaque seconde. nil si pas de réponse.
     }
 
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         // Appelez votre API, puis rendez un TrainSnapshot (nil si injoignable).
         // Les spécificités du réseau passent par TrainViewState.metrics :
         //   MetricRow(id: "position", symbol: "location.fill", text: "…")
+        // Renseignez StopRow.coordinate et TrainViewState.trainCoordinate pour
+        // placer gares et train sur la carte du panneau.
         // Déclarez .journey et remplissez stops + JourneyContext pour obtenir
         // la timeline, l'ETA et les notifications d'arrivée sans code en plus.
         // Renseignez StopRow.platform / .scheduledPlatform et la voie s'affiche

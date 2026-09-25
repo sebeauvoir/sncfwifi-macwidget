@@ -5,6 +5,16 @@ import Combine
 /// Largeur fixe du panneau (style Centre de contrôle).
 private let panelWidth: CGFloat = 300
 
+/// Hauteur de la carte du trajet.
+private let mapHeight: CGFloat = 150
+
+/// Hauteur maximale du contenu : tout l'écran, moins la barre de menus et le pied du panneau.
+/// Le défilement ne sert plus que de filet sur un écran trop petit pour tout afficher.
+private var panelMaxContentHeight: CGFloat {
+    let screen = NSScreen.main?.visibleFrame.height ?? 800
+    return max(460, screen - 90)
+}
+
 extension Color {
     init(hex: UInt32) {
         self.init(red: Double((hex >> 16) & 0xFF) / 255.0,
@@ -121,6 +131,20 @@ private struct ConnectedView: View {
                     TimelineView(stops: state.stops, tint: state.provider.accent)
                 }
 
+                if showsMap {
+                    TrainMapView(
+                        input: TrainMapInput(stops: state.stops,
+                                             train: state.trainCoordinate,
+                                             arrivalId: state.selectedArrivalId,
+                                             routePath: state.routePath,
+                                             trail: state.trail,
+                                             tintHex: state.provider.accentHex),
+                        // Le serveur démo ne sert pas de tuiles : MapKit en mode démo.
+                        localTiles: MockTrainData.shared.isEnabled ? nil : state.provider.mapTilesOrigin
+                    )
+                    .frame(height: mapHeight)
+                }
+
                 if !state.metrics.isEmpty {
                     Divider()
                     MetricsView(rows: state.metrics, tint: state.provider.accent)
@@ -136,12 +160,27 @@ private struct ConnectedView: View {
                     }
                 }
 
+                if !state.extraMetrics.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("En vrac")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        ExtraMetricsView(tiles: state.extraMetrics, tint: state.provider.accent)
+                    }
+                }
+
                 RefreshStatusView()
                     .padding(.top, 2)
             }
             .padding(16)
         }
-        .frame(maxHeight: 460)
+        .frame(maxHeight: panelMaxContentHeight)
+    }
+
+    /// Carte affichée dès qu'il y a quelque chose à y placer : le train ou une gare.
+    private var showsMap: Bool {
+        state.trainCoordinate != nil || state.stops.contains { $0.coordinate != nil }
     }
 }
 
@@ -195,14 +234,15 @@ private struct HeaderView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if state.speedKmh > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "speedometer")
-                            .foregroundColor(state.provider.accent)
-                        Text("\(state.speedKmh) km/h")
-                            .foregroundColor(.primary)
+                if state.speedKmh > 0 || state.remainingKm != nil {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        if state.speedKmh > 0 {
+                            readout(symbol: "speedometer", value: "\(state.speedKmh)", unit: "km/h")
+                        }
+                        if let km = state.remainingKm {
+                            readout(symbol: "mappin.and.ellipse", value: DistanceFormat.km(km), unit: "km restants")
+                        }
                     }
-                    .font(.system(size: 12, weight: .semibold))
                     .fixedSize()
                 }
             }
@@ -217,6 +257,21 @@ private struct HeaderView: View {
                 }
                 .font(.system(size: 11, weight: .medium))
             }
+        }
+    }
+
+    /// « ⏱ 278 km/h » : valeur en gras, unité plus petite et discrète.
+    private func readout(symbol: String, value: String, unit: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(state.provider.accent)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.primary)
+            + Text(" \(unit)")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
         }
     }
 
@@ -283,6 +338,49 @@ private struct MetricsView: View {
         }
         flush()
         return groups
+    }
+}
+
+// MARK: - En vrac
+
+/// Tuiles façon tableau de bord : deux colonnes, libellé discret au-dessus, valeur en gras sur
+/// une ligne. Les tuiles larges (durées d'arrêt) prennent toute la largeur en dessous.
+private struct ExtraMetricsView: View {
+    let tiles: [ExtraMetric]
+    let tint: Color
+
+    private let columns = [GridItem(.flexible(), spacing: 12, alignment: .topLeading),
+                           GridItem(.flexible(), spacing: 12, alignment: .topLeading)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                ForEach(tiles.filter { !$0.wide }) { tile($0) }
+            }
+            ForEach(tiles.filter(\.wide)) { tile($0) }
+        }
+    }
+
+    private func tile(_ metric: ExtraMetric) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: metric.symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 14)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(metric.label)
+                    .font(.system(size: 9.5))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Text(metric.value)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(metric.wide ? nil : 1)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: metric.wide)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
