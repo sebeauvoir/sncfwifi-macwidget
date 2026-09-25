@@ -54,6 +54,10 @@ struct TrainMapView: NSViewRepresentable {
         private var stopAnnotations: [StopAnnotation] = []
         private let trainAnnotation = MKPointAnnotation()
         private var hasTrain = false
+        /// Dernier point du tracé atteint par le train. Le tracé peut repasser près de lui-même
+        /// (rebroussement à Marseille Saint-Charles) : on cherche d'abord devant ce point.
+        private var pathCut = 0
+        private var pathCount = 0
 
         /// Cadre appliqué en dernier, pour ne recadrer que quand le train a assez avancé.
         private var framedRect: MKMapRect?
@@ -70,11 +74,16 @@ struct TrainMapView: NSViewRepresentable {
 
             updateStops(map, located: located, arrivalId: input.arrivalId)
 
+            if input.routePath.count != pathCount {
+                pathCount = input.routePath.count
+                pathCut = 0
+            }
             let lines = Self.lines(located: located,
                                    train: input.train,
                                    routePath: input.routePath,
                                    trail: input.trail,
-                                   arrivalIndex: arrivalIndex)
+                                   arrivalIndex: arrivalIndex,
+                                   pathCut: &pathCut)
             // Dans cet ordre : le parcouru, ajouté en dernier, passe au-dessus du restant.
             remainingLine = replace(remainingLine, with: lines.remaining, travelled: false, on: map)
             travelledLine = replace(travelledLine, with: lines.travelled, travelled: true, on: map)
@@ -90,7 +99,8 @@ struct TrainMapView: NSViewRepresentable {
                                   train: CLLocationCoordinate2D?,
                                   routePath: [CLLocationCoordinate2D],
                                   trail: [CLLocationCoordinate2D],
-                                  arrivalIndex: Int?)
+                                  arrivalIndex: Int?,
+                                  pathCut: inout Int)
             -> (travelled: [CLLocationCoordinate2D], remaining: [CLLocationCoordinate2D], frame: [CLLocationCoordinate2D]) {
 
             let arrival = arrivalIndex.flatMap { located[$0].coordinate }
@@ -98,7 +108,8 @@ struct TrainMapView: NSViewRepresentable {
             // Tracé publié : on le coupe au point le plus proche du train.
             if routePath.count > 1 {
                 let here = train ?? located.first { $0.status == .current }?.coordinate
-                let cut = here.map { nearestIndex(in: routePath, to: $0) } ?? 0
+                let cut = here.map { forwardIndex(in: routePath, to: $0, from: pathCut) } ?? 0
+                pathCut = cut
                 var travelled = Array(routePath[...cut])
                 var remaining = Array(routePath[cut...])
                 if let train {
@@ -107,7 +118,8 @@ struct TrainMapView: NSViewRepresentable {
                 }
                 var frame = [train].compactMap { $0 }
                 if let arrival {
-                    let end = max(cut, nearestIndex(in: routePath, to: arrival))
+                    // Gare d'arrivée cherchée devant le train, pour la même raison.
+                    let end = nearest(in: routePath, to: arrival, range: cut..<routePath.count).index
                     frame += routePath[cut...end]
                     frame.append(arrival)
                 }
@@ -140,11 +152,33 @@ struct TrainMapView: NSViewRepresentable {
         }
 
         private static func nearestIndex(in path: [CLLocationCoordinate2D], to point: CLLocationCoordinate2D) -> Int {
+            nearest(in: path, to: point, range: path.indices).index
+        }
+
+        /// Point du tracé le plus proche, cherché juste devant le dernier atteint (une
+        /// centaine de kilomètres) : un passage plus loin sur les mêmes voies ne doit pas faire
+        /// sauter le train en avant. Si rien n'est proche (plus de 2 km : app lancée en cours
+        /// de route, GPS qui décroche), on cherche sur tout le tracé.
+        private static func forwardIndex(in path: [CLLocationCoordinate2D],
+                                         to point: CLLocationCoordinate2D,
+                                         from start: Int) -> Int {
+            let lower = min(max(0, start), path.count - 1)
+            let upper = min(path.count, lower + 400)
+            let ahead = nearest(in: path, to: point, range: lower..<upper)
+            // ~2 km, en degrés au carré.
+            let threshold = pow(2_000 / 111_000, 2.0)
+            return ahead.distance < threshold ? ahead.index : nearestIndex(in: path, to: point)
+        }
+
+        private static func nearest(in path: [CLLocationCoordinate2D],
+                                    to point: CLLocationCoordinate2D,
+                                    range: Range<Int>) -> (index: Int, distance: Double) {
             // Distance au carré en plan local : suffisant pour départager des points voisins.
             let scale = cos(point.latitude * .pi / 180)
-            var best = 0
+            var best = range.lowerBound
             var bestDistance = Double.greatestFiniteMagnitude
-            for (index, candidate) in path.enumerated() {
+            for index in range {
+                let candidate = path[index]
                 let dx = (candidate.longitude - point.longitude) * scale
                 let dy = candidate.latitude - point.latitude
                 let distance = dx * dx + dy * dy
@@ -153,7 +187,7 @@ struct TrainMapView: NSViewRepresentable {
                     best = index
                 }
             }
-            return best
+            return (best, bestDistance)
         }
 
         /// Ajoute le nouveau tracé puis retire l'ancien : pas de clignotement entre les deux.
