@@ -30,6 +30,11 @@ class MockTrainData {
 
     private init() {}
 
+    /// URL d'un endpoint du serveur démo.
+    func url(path: String) -> URL? {
+        baseURL.flatMap { URL(string: path, relativeTo: $0) }
+    }
+
     func start() {
         NotificationCenter.default.post(name: NSNotification.Name("DemoDataDidUpdate"), object: nil)
     }

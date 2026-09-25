@@ -86,6 +86,8 @@ final class EurostarAPIClient {
     private let systemURL       = URL(string: "\(base)/system/")!
 
     private let timeout: TimeInterval = 5
+    /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
+    private let speedTimeout: TimeInterval = 2
 
     /// Sonde légère : un seul appel, pour savoir si on est à bord d'un Eurostar.
     func probe(completion: @escaping (Bool) -> Void) {
@@ -95,6 +97,20 @@ final class EurostarAPIClient {
         }
         fetch(url: positionURL) { json in
             completion(json?["latitude"] != nil)
+        }
+    }
+
+    /// Vitesse seule, depuis `position` (en m/s).
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        let url = MockTrainData.shared.isEnabled
+            ? MockTrainData.shared.url(path: "/api/jsonp/position/")
+            : positionURL
+        guard let url else {
+            completion(nil)
+            return
+        }
+        APIBody.fetch(url: url, timeout: speedTimeout, ignoreCache: true) { position in
+            completion(EurostarAPIClient.num(position?["speed"]).map { Int(($0 * 3.6).rounded()) })
         }
     }
 

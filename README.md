@@ -18,7 +18,8 @@ qui est disponible dans chaque train.
 ## Le widget 🖥️
 
 **Pastille** — la vitesse du train, en permanence et sur tous les réseaux (`278 km/h`,
-`0 km/h` à l'arrêt). Elle est mise à jour à chaque interrogation de l'API (toutes les 30 s).
+`0 km/h` à l'arrêt). Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+données est rafraîchi toutes les 30 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
 **Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les

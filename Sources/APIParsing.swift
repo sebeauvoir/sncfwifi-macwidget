@@ -28,16 +28,22 @@ enum APIBody {
     }
 
     /// Requête GET + décodage, sur la file par défaut d'URLSession.
+    /// `ignoreCache` : pour les lectures à haute fréquence (vitesse chaque seconde), qu'un
+    /// en-tête de cache du portail ne doit pas figer.
     static func fetch(url: URL,
                       timeout: TimeInterval,
+                      ignoreCache: Bool = false,
                       completion: @escaping ([String: Any]?) -> Void) {
-        request(url: url, timeout: timeout) { completion($0.flatMap(object(from:))) }
+        request(url: url, timeout: timeout, ignoreCache: ignoreCache) { completion($0.flatMap(object(from:))) }
     }
 
     private static func request(url: URL,
                                 timeout: TimeInterval,
+                                ignoreCache: Bool = false,
                                 completion: @escaping (Data?) -> Void) {
-        var request = URLRequest(url: url, timeoutInterval: timeout)
+        var request = URLRequest(url: url,
+                                 cachePolicy: ignoreCache ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy,
+                                 timeoutInterval: timeout)
         request.setValue("sncfwifi-macapp/1.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         URLSession.shared.dataTask(with: request) { data, _, _ in completion(data) }.resume()

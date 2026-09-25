@@ -88,12 +88,26 @@ final class LyriaAPIClient {
     private let vehicleURL  = URL(string: "\(base)/api/transport/current/")!
 
     private let timeout: TimeInterval = 5
+    /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
+    private let speedTimeout: TimeInterval = 2
 
     /// La position est le seul endpoint à la fois léger et toujours servi, même hors trajet
     /// référencé.
     func probe(completion: @escaping (Bool) -> Void) {
         APIBody.fetch(url: gpsURL, timeout: timeout) { json in
             completion(LyriaAPIClient.looksLikePosition(json))
+        }
+    }
+
+    /// Vitesse seule, depuis le GPS brut (en m/s). Pas de repli sur `travel/position` : le
+    /// cycle complet s'en charge toutes les 30 s.
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        APIBody.fetch(url: gpsURL, timeout: speedTimeout, ignoreCache: true) { gps in
+            guard LyriaAPIClient.looksLikePosition(gps) else {
+                completion(nil)
+                return
+            }
+            completion(APIValue.double(gps?["speed"]).map { Int(($0 * 3.6).rounded()) })
         }
     }
 

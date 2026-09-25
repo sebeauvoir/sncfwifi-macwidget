@@ -10,6 +10,11 @@ final class MenuBarController: NSObject {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var timer: Timer?
+    /// Relit la vitesse chaque seconde, entre deux cycles complets.
+    private var speedTimer: Timer?
+    /// Une seule lecture de vitesse à la fois : sur un réseau lent, les requêtes ne
+    /// s'empilent pas.
+    private var speedRequestInFlight = false
     private var lastRawData: [String: Any]?
 
     private let store = TrainStore()
@@ -91,6 +96,9 @@ final class MenuBarController: NSObject {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.refreshSpeed()
+        }
     }
 
     // MARK: - Popover
@@ -166,6 +174,29 @@ final class MenuBarController: NSObject {
     private func redrawTitle() {
         guard let speedKmh else { return }
         applyTitleImage(text: "\(speedKmh) km/h", progress: nil)
+    }
+
+    /// Entre deux cycles complets, ne relit que la vitesse : un seul petit appel par seconde.
+    private func refreshSpeed() {
+        guard !speedRequestInFlight, speedKmh != nil, let source = activeSource else { return }
+        let token = refreshToken
+        speedRequestInFlight = true
+        source.fetchSpeed { [weak self] speed in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.speedRequestInFlight = false
+                // Un cycle complet passé entre-temps fait foi (changement de train, déconnexion).
+                guard self.isCurrent(token), self.speedKmh != nil,
+                      let speed, speed != self.speedKmh
+                else { return }
+                self.speedKmh = speed
+                self.redrawTitle()
+                if case .connected(var viewState) = self.store.state {
+                    viewState.speedKmh = speed
+                    self.store.state = .connected(viewState)
+                }
+            }
+        }
     }
 
     private func applyTitleImage(text: String, progress: Double?) {

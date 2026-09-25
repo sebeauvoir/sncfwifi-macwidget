@@ -37,8 +37,8 @@ struct JourneyContext {
     let isStoppedAtStation: Bool
 }
 
-/// Contenu de la pastille. Recalculable localement : le `clockTimer` rafraîchit le décompte
-/// toutes les 10 s sans rappeler l'API.
+/// Ancien contenu de la pastille (arrêt, décompte, retard). La pastille n'affiche plus que la
+/// vitesse ; les sources le calculent toujours.
 struct StatusBadge {
     /// Texte affiché en l'absence de décompte — « Eurostar · 297 km/h », « Milano », « inOui ».
     var text: String
@@ -90,6 +90,9 @@ protocol TrainDataSource: AnyObject {
     func probe(completion: @escaping (Bool) -> Void)
     /// nil = API injoignable.
     func fetch(completion: @escaping (TrainSnapshot?) -> Void)
+    /// Vitesse seule en km/h, via un unique endpoint léger : la pastille la relit chaque
+    /// seconde entre deux cycles complets. `nil` = pas de réponse exploitable.
+    func fetchSpeed(completion: @escaping (Int?) -> Void)
     /// Carte du bar-restaurant, chargée à l'ouverture du panneau et non à chaque cycle.
     /// `nil` = indisponible. Un réseau sans carte n'a rien à implémenter.
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void)

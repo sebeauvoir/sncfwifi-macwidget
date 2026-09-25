@@ -11,6 +11,8 @@ final class TrainAPIClient {
     private let statusURL     = URL(string: "https://wifi.sncf/router/api/connection/status")!
     
     private let timeout: TimeInterval = 5
+    /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
+    private let speedTimeout: TimeInterval = 2
 
     /// Sonde légère : un seul appel, pour savoir si on est sur le réseau d'un train SNCF.
     /// Utilisée quand le SSID est illisible et qu'il faut choisir entre les fournisseurs.
@@ -20,6 +22,20 @@ final class TrainAPIClient {
             return
         }
         fetch(url: gpsURL) { completion($0 != nil) }
+    }
+
+    /// Vitesse seule, depuis `train/gps` (en m/s).
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        let url = MockTrainData.shared.isEnabled
+            ? MockTrainData.shared.url(path: "/router/api/train/gps")
+            : gpsURL
+        guard let url else {
+            completion(nil)
+            return
+        }
+        APIBody.fetch(url: url, timeout: speedTimeout, ignoreCache: true) { gps in
+            completion(APIValue.double(gps?["speed"]).map { Int($0 * 3.6) })
+        }
     }
 
     /// Récupère toutes les infos en parallèle, notifie sur le main thread.

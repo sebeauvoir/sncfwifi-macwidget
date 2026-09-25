@@ -22,6 +22,10 @@ final class SNCFDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        client.fetchSpeed(completion: completion)
+    }
+
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         client.fetchAll { [weak self] gps, details, bar, stats, status in
             guard let self, gps != nil || details != nil else {

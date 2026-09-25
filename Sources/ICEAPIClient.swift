@@ -100,12 +100,21 @@ final class ICEAPIClient {
     private let bapStatusURL = URL(string: "\(base)/bap/api/bap-service-status")!
 
     private let timeout: TimeInterval = 5
+    /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
+    private let speedTimeout: TimeInterval = 2
     /// La carte pèse ~90 Ko : elle mérite plus de marge que les appels d'état.
     private let menuTimeout: TimeInterval = 12
 
     func probe(completion: @escaping (Bool) -> Void) {
         APIBody.fetch(url: statusURL, timeout: timeout) { json in
             completion(json?["trainType"] != nil || json?["speed"] != nil)
+        }
+    }
+
+    /// Vitesse seule, depuis `status` (déjà en km/h).
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        APIBody.fetch(url: statusURL, timeout: speedTimeout, ignoreCache: true) { status in
+            completion(APIValue.double(status?["speed"]).map { Int($0.rounded()) })
         }
     }
 

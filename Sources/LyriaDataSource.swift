@@ -26,6 +26,10 @@ final class LyriaDataSource: TrainDataSource {
         client.probe(completion: completion)
     }
 
+    func fetchSpeed(completion: @escaping (Int?) -> Void) {
+        client.fetchSpeed(completion: completion)
+    }
+
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         client.fetchAll { [weak self] snapshot in
             guard let self, let snapshot else {
