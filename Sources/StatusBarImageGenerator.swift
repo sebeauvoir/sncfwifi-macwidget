@@ -10,8 +10,14 @@ class StatusBarImageGenerator {
     /// - Parameters:
     ///   - progress: `nil` pour ne pas dessiner de jauge (réseau sans desserte connue).
     ///   - maxWidth: le texte est tronqué au-delà.
-    static func draw(text: String, progress: Double?, maxWidth: CGFloat = StatusBarImageGenerator.maxWidth) -> NSImage? {
-        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    ///   - minWidthText: gabarit de largeur minimale (ex. « 888 km/h ») ; le texte plus court
+    ///     est centré, pour que la pastille et la jauge ne changent pas de taille.
+    static func draw(text: String,
+                     progress: Double?,
+                     maxWidth: CGFloat = StatusBarImageGenerator.maxWidth,
+                     minWidthText: String? = nil) -> NSImage? {
+        // Chiffres à chasse fixe : la vitesse ne fait pas trembler la pastille.
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
@@ -27,7 +33,9 @@ class StatusBarImageGenerator {
 
         let marginX: CGFloat = 4
         let maxTextWidth = max(0, maxWidth - marginX * 2)
-        let textWidth = min(naturalSize.width, maxTextWidth)
+        let minTextWidth = minWidthText.map { NSAttributedString(string: $0, attributes: attributes).size().width } ?? 0
+        let textWidth = min(max(naturalSize.width, minTextWidth), maxTextWidth)
+        let drawnTextWidth = min(naturalSize.width, textWidth)
         let width = textWidth + (marginX * 2)
         let height: CGFloat = 22
 
@@ -36,7 +44,8 @@ class StatusBarImageGenerator {
 
         // Décalé vers le haut pour laisser place à la barre, recentré s'il n'y en a pas.
         let textY: CGFloat = progress == nil ? 4 : 6
-        let textRect = NSRect(x: marginX, y: textY, width: textWidth, height: naturalSize.height)
+        let textX = marginX + (textWidth - drawnTextWidth) / 2
+        let textRect = NSRect(x: textX, y: textY, width: drawnTextWidth, height: naturalSize.height)
         attributedString.draw(in: textRect)
 
         if let progress {

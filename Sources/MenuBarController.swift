@@ -176,7 +176,7 @@ final class MenuBarController: NSObject {
     /// dessous quand le réseau expose une desserte.
     private func redrawTitle() {
         guard let speedKmh else { return }
-        applyTitleImage(text: "\(speedKmh) km/h", progress: progress)
+        applyTitleImage(text: "\(speedKmh) km/h", progress: progress, minWidthText: "888 km/h")
     }
 
     /// Entre deux cycles complets, ne relit que la vitesse : un seul petit appel par seconde.
@@ -202,9 +202,9 @@ final class MenuBarController: NSObject {
         }
     }
 
-    private func applyTitleImage(text: String, progress: Double?) {
+    private func applyTitleImage(text: String, progress: Double?, minWidthText: String? = nil) {
         guard !text.isEmpty,
-              let image = StatusBarImageGenerator.draw(text: text, progress: progress)
+              let image = StatusBarImageGenerator.draw(text: text, progress: progress, minWidthText: minWidthText)
         else { return }
         statusItem.button?.title = ""
         statusItem.button?.image = image
