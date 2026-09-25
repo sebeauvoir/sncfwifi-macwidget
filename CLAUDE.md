@@ -28,9 +28,10 @@ tag ni release.
 Pour chaque modification :
 
 1. Travailler sur une branche, jamais directement sur `main`.
-2. Pour vérifier que le code compile, ou pour que l'utilisateur teste l'app, lancer le workflow
-   `build.yml` sur la branche (`workflow_dispatch`) et donner le lien du run. L'artefact se
-   télécharge depuis la page du run.
+2. **Toujours demander à l'utilisateur avant de lancer un build**, même de test : il a souvent
+   de nouvelles idées entre-temps. Une fois d'accord, lancer le workflow `build.yml` sur la
+   branche (`workflow_dispatch`) et donner le lien direct de l'artefact
+   (`actions/runs/<run>/artifacts/<id>`).
 3. Ouvrir une pull request vers `main`.
 4. Fusionner la pull request seulement quand l'utilisateur le demande, en méthode `rebase`
    (historique linéaire, changelog propre). GitHub supprime alors la branche tout seul
