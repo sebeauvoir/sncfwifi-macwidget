@@ -78,6 +78,11 @@ for logo_ext in png pdf; do
     fi
 done
 
+# Carte hors ligne (MapLibre + pmtiles, cf. Resources/Map/README.md), lue par
+# TrainMapView.swift dans Contents/Resources/Map/.
+mkdir -p "${RESOURCES_DIR}/Map"
+cp Resources/Map/*.{html,js,css,txt} "${RESOURCES_DIR}/Map/"
+
 # Signature ad-hoc : indispensable pour que TCC (Location Services) reconnaisse l'app
 # -s -          : signature ad-hoc (pas de certificat developer requis)
 # --deep        : signe aussi les frameworks/plugins embarqués

@@ -13,7 +13,10 @@ final class SNCFDataSource: TrainDataSource {
         ssids: ["_sncf_wifi_inoui", "ouifi", "sncf_wifi_intercites", "wifi_sncf"],
         accentHex: 0x7D206F,
         features: [.journey, .speed, .wifiQuality, .dataQuota],
-        apiHost: "wifi.sncf"
+        apiHost: "wifi.sncf",
+        // Relevé dans la page wifi.sncf/fr/journey : style MapLibre et tuiles PMTiles
+        // (`maps/europe.pmtiles`, `maps/osm_railways.pmtiles`) servis par le train.
+        mapTilesOrigin: URL(string: "https://wifi.sncf/")
     )
 
     private let client = TrainAPIClient()
@@ -38,6 +41,16 @@ final class SNCFDataSource: TrainDataSource {
             }
             completion(self.makeSnapshot(gps: gps, details: details, bar: bar, stats: stats, status: status))
         }
+    }
+
+    /// Identifiant d'un arrêt, le même pour la timeline, le sélecteur d'arrivée et la carte.
+    /// L'API ne publie pas d'`id` mais un code gare (`FRVLA`) ; le libellé sert de dernier
+    /// recours, suffixé de la position pour rester unique.
+    static func stopId(_ stop: [String: Any], index: Int? = nil) -> String {
+        if let id = stop["id"] as? String, !id.isEmpty { return id }
+        if let code = stop["code"] as? String, !code.isEmpty { return code }
+        let label = (stop["label"] as? String) ?? "Gare"
+        return index.map { "\(label)-\($0)" } ?? label
     }
 
     func makeSnapshot(gps: [String: Any]?,
@@ -165,7 +178,7 @@ final class SNCFDataSource: TrainDataSource {
             // Gare d'arrivée cible : celle choisie dans le panneau, si elle est encore devant.
             var arrivalStationIndex = allStops.count - 1
             if let savedId = UserDefaults.standard.string(forKey: "arrivalStationId"),
-               let idx = allStops.firstIndex(where: { ($0["id"] as? String) == savedId || ($0["label"] as? String) == savedId }),
+               let idx = allStops.firstIndex(where: { SNCFDataSource.stopId($0) == savedId || ($0["label"] as? String) == savedId }),
                idx >= nextStopIndex {
                 arrivalStationIndex = idx
             }
@@ -232,7 +245,7 @@ final class SNCFDataSource: TrainDataSource {
             let delay = (stop["delay"] as? Int) ?? 0
             let status: StopStatus = i < nextStopIndex ? .passed : (i == nextStopIndex ? .current : .upcoming)
             return StopRow(
-                id: (stop["id"] as? String) ?? "\(lbl)-\(i)",
+                id: SNCFDataSource.stopId(stop, index: i),
                 label: lbl,
                 theoricTime: APIValue.time(stop["theoricDate"] as? String) ?? "",
                 realTime: APIValue.time(stop["realDate"] as? String) ?? "",
@@ -273,11 +286,13 @@ final class SNCFDataSource: TrainDataSource {
         // Sélecteur de gare d'arrivée
         viewState.arrivalOptions = allStops.enumerated().map { (i, stop) -> ArrivalOption in
             let lbl = (stop["label"] as? String) ?? "Gare \(i)"
-            return ArrivalOption(id: (stop["id"] as? String) ?? lbl, label: lbl)
+            return ArrivalOption(id: SNCFDataSource.stopId(stop, index: i), label: lbl)
         }
+        // Un réglage enregistré avant le passage au code gare porte le libellé : il reste reconnu.
         let savedId = UserDefaults.standard.string(forKey: "arrivalStationId")
-        let optionIds = viewState.arrivalOptions.map { $0.id }
-        viewState.selectedArrivalId = savedId.flatMap { optionIds.contains($0) ? $0 : nil } ?? optionIds.last
+        viewState.selectedArrivalId = savedId
+            .flatMap { saved in viewState.arrivalOptions.first { $0.id == saved || $0.label == saved }?.id }
+            ?? viewState.arrivalOptions.last?.id
 
 
         var payloads: [String: Any] = [:]

@@ -1,20 +1,341 @@
 import AppKit
 import MapKit
 import SwiftUI
+import WebKit
 
 /// Carte du trajet, à la manière de `wifi.sncf/fr/journey` : portion parcourue en trait
 /// plein, reste du trajet en trait clair, gares et train en pastilles à pictogramme. Le cadrage
 /// suit le train : il tient à un bout le train, à l'autre la gare d'arrivée choisie.
 ///
-/// `MKMapView` plutôt que la `Map` de SwiftUI : sur macOS 11, cette dernière ne sait pas
-/// dessiner de tracé.
-struct TrainMapView: NSViewRepresentable {
+/// Deux rendus pour une même géométrie :
+/// - les tuiles du serveur embarqué, par MapLibre (`LocalTileMapView`), quand le réseau en a
+///   un : aucune requête ne part sur Internet ;
+/// - MapKit sinon (`AppleMapView`), dont le fond de carte vient d'Internet.
+struct TrainMapView: View {
+    let input: TrainMapInput
+    /// Origine du serveur de tuiles embarqué (`https://wifi.sncf/`), `nil` s'il n'y en a pas.
+    let localTiles: URL?
+
+    var body: some View {
+        if let localTiles, LocalTileMapView.html != nil {
+            LocalTileMapView(input: input, origin: localTiles)
+        } else {
+            AppleMapView(input: input)
+        }
+    }
+}
+
+/// Ce que la carte affiche, quel que soit le rendu.
+struct TrainMapInput {
     let stops: [StopRow]
     let train: CLLocationCoordinate2D?
     let arrivalId: String?
     let routePath: [CLLocationCoordinate2D]
     let trail: [CLLocationCoordinate2D]
-    let tint: NSColor
+    let tintHex: UInt32
+
+    var tint: NSColor { NSColor(hex: tintHex) }
+    var tintCSS: String { String(format: "#%06X", tintHex) }
+}
+
+// MARK: - Géométrie commune
+
+/// Tracés et cadrage, calculés en Swift pour les deux rendus. Les tracés ne portent pas la
+/// position du train : chaque rendu la raccorde lui-même, ce qui évite de renvoyer tout le
+/// tracé à chaque seconde.
+struct TrainMapGeometry {
+    struct Output {
+        let located: [StopRow]
+        let arrivalId: String?
+        let travelled: [CLLocationCoordinate2D]
+        let remaining: [CLLocationCoordinate2D]
+        /// Change quand les tracés changent ; stable tant que seul le train bouge.
+        let linesKey: String
+        /// Change quand les pastilles des gares changent.
+        let stopsKey: String
+        /// Cadre train → gare d'arrivée, ou ~50 km autour du train, ou tout le trajet.
+        let frame: MKMapRect?
+    }
+
+    /// Dernier point du tracé atteint par le train. Le tracé peut repasser près de lui-même
+    /// (rebroussement à Marseille Saint-Charles) : on cherche d'abord devant ce point.
+    private var pathCut = 0
+    private var pathCount = 0
+
+    mutating func compute(_ input: TrainMapInput) -> Output {
+        let located = input.stops.filter { $0.coordinate != nil }
+        let arrivalIndex = located.firstIndex { $0.id == input.arrivalId }
+        let arrival = arrivalIndex.flatMap { located[$0].coordinate }
+        let train = input.train
+        let stopsKey = located.map { "\($0.id):\($0.status)" }.joined(separator: "|") + "→\(input.arrivalId ?? "")"
+
+        var travelled: [CLLocationCoordinate2D]
+        var remaining: [CLLocationCoordinate2D]
+        var framePoints = [train].compactMap { $0 }
+        let linesKey: String
+
+        let path = input.routePath
+        if path.count > 1 {
+            // Tracé publié : coupé au point le plus proche du train.
+            if path.count != pathCount {
+                pathCount = path.count
+                pathCut = 0
+            }
+            let here = train ?? located.first { $0.status == .current }?.coordinate
+            let cut = here.map { Self.forwardIndex(in: path, to: $0, from: pathCut) } ?? 0
+            pathCut = cut
+            travelled = Array(path[...cut])
+            remaining = Array(path[cut...])
+            if let arrival {
+                // Gare d'arrivée cherchée devant le train, pour la même raison.
+                let end = Self.nearest(in: path, to: arrival, range: cut..<path.count).index
+                framePoints += path[cut...end]
+                framePoints.append(arrival)
+            }
+            linesKey = "path:\(path.count):\(cut)"
+        } else {
+            // Sans tracé publié : gares reliées en ligne droite, et positions relevées pour la
+            // portion parcourue depuis le lancement de l'app.
+            let passed = located.filter { $0.status == .passed }.compactMap(\.coordinate)
+            if input.trail.count > 1, let start = input.trail.first {
+                // Gares passées jusqu'à la plus proche du début du relevé, puis le relevé.
+                let joint = passed.isEmpty ? -1 : Self.nearestIndex(in: passed, to: start)
+                travelled = Array(passed.prefix(joint + 1)) + input.trail
+            } else {
+                travelled = passed
+            }
+            let aheadIndices = located.indices.filter { located[$0].status != .passed }
+            remaining = aheadIndices.compactMap { located[$0].coordinate }
+            if let arrivalIndex, let arrival {
+                framePoints += aheadIndices.filter { $0 <= arrivalIndex }.compactMap { located[$0].coordinate }
+                framePoints.append(arrival)
+            }
+            linesKey = "stops:\(stopsKey):\(input.trail.count)"
+        }
+
+        // Ni train ni gare d'arrivée : tout le trajet.
+        if framePoints.isEmpty { framePoints = located.compactMap(\.coordinate) }
+
+        return Output(located: located,
+                      arrivalId: input.arrivalId,
+                      travelled: travelled,
+                      remaining: remaining,
+                      linesKey: linesKey,
+                      stopsKey: stopsKey,
+                      frame: Self.frame(framePoints))
+    }
+
+    /// Rectangle englobant, jamais plus serré que ~4 km (à l'approche de la gare), ni que
+    /// ~50 km autour d'un point seul.
+    private static func frame(_ points: [CLLocationCoordinate2D]) -> MKMapRect? {
+        guard let first = points.first else { return nil }
+        let mapPoints = points.map { MKMapPoint($0) }
+        var rect = mapPoints.dropFirst().reduce(MKMapRect(origin: mapPoints[0], size: MKMapSize())) {
+            $0.union(MKMapRect(origin: $1, size: MKMapSize()))
+        }
+        let meters: Double = points.count == 1 ? 50_000 : 4_000
+        let minimum = MKMapPointsPerMeterAtLatitude(first.latitude) * meters
+        if rect.size.width < minimum || rect.size.height < minimum {
+            let width = max(rect.size.width, minimum)
+            let height = max(rect.size.height, minimum)
+            rect = MKMapRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height)
+        }
+        return rect
+    }
+
+    static func nearestIndex(in path: [CLLocationCoordinate2D], to point: CLLocationCoordinate2D) -> Int {
+        nearest(in: path, to: point, range: path.indices).index
+    }
+
+    /// Point du tracé le plus proche, cherché juste devant le dernier atteint (une centaine de
+    /// kilomètres) : un passage plus loin sur les mêmes voies ne doit pas faire sauter le train
+    /// en avant. Si rien n'est proche (plus de 2 km : app lancée en cours de route, GPS qui
+    /// décroche), on cherche sur tout le tracé.
+    private static func forwardIndex(in path: [CLLocationCoordinate2D],
+                                     to point: CLLocationCoordinate2D,
+                                     from start: Int) -> Int {
+        let lower = min(max(0, start), path.count - 1)
+        let upper = min(path.count, lower + 400)
+        let ahead = nearest(in: path, to: point, range: lower..<upper)
+        // ~2 km, en degrés au carré.
+        let threshold = pow(2_000 / 111_000, 2.0)
+        return ahead.distance < threshold ? ahead.index : nearestIndex(in: path, to: point)
+    }
+
+    private static func nearest(in path: [CLLocationCoordinate2D],
+                                to point: CLLocationCoordinate2D,
+                                range: Range<Int>) -> (index: Int, distance: Double) {
+        // Distance au carré en plan local : suffisant pour départager des points voisins.
+        let scale = cos(point.latitude * .pi / 180)
+        var best = range.lowerBound
+        var bestDistance = Double.greatestFiniteMagnitude
+        for index in range {
+            let candidate = path[index]
+            let dx = (candidate.longitude - point.longitude) * scale
+            let dy = candidate.latitude - point.latitude
+            let distance = dx * dx + dy * dy
+            if distance < bestDistance {
+                bestDistance = distance
+                best = index
+            }
+        }
+        return (best, bestDistance)
+    }
+}
+
+// MARK: - Rendu hors ligne : tuiles du serveur embarqué
+
+/// Carte MapLibre dans une vue web, avec le style et les tuiles PMTiles du portail. La page
+/// est chargée avec l'origine du portail : ses lectures de tuiles restent de même origine, le
+/// serveur du train n'envoyant pas d'en-têtes CORS.
+struct LocalTileMapView: NSViewRepresentable {
+    let input: TrainMapInput
+    let origin: URL
+
+    /// `map.html` avec MapLibre et pmtiles insérés, lu une fois. `nil` si les ressources
+    /// manquent : la carte retombe alors sur MapKit.
+    static let html: String? = {
+        func resource(_ name: String, _ ext: String) -> String? {
+            Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Map")
+                .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        }
+        guard let template = resource("map", "html"),
+              let css = resource("maplibre-gl", "css"),
+              let maplibre = resource("maplibre-gl", "js"),
+              let pmtiles = resource("pmtiles", "js")
+        else { return nil }
+        return template
+            .replacingOccurrences(of: "/*MAPLIBRE_CSS*/", with: css)
+            .replacingOccurrences(of: "/*PMTILES_JS*/", with: pmtiles)
+            .replacingOccurrences(of: "/*MAPLIBRE_JS*/", with: maplibre)
+    }()
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(WeakMessageHandler(context.coordinator), name: "map")
+        let web = WKWebView(frame: .zero, configuration: configuration)
+        web.navigationDelegate = context.coordinator
+        // Fond transparent le temps que les tuiles arrivent.
+        web.setValue(false, forKey: "drawsBackground")
+        web.allowsMagnification = false
+        web.wantsLayer = true
+        web.layer?.cornerRadius = 8
+        web.layer?.masksToBounds = true
+        if let html = Self.html {
+            web.loadHTMLString(html, baseURL: origin)
+        }
+        return web
+    }
+
+    func updateNSView(_ web: WKWebView, context: Context) {
+        context.coordinator.update(web, input: input)
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        private var geometry = TrainMapGeometry()
+        private var isLoaded = false
+        private var lastInput: TrainMapInput?
+        /// Derniers tracés et pastilles envoyés à la page : on ne les renvoie que s'ils changent.
+        private var sentLinesKey = ""
+        private var sentStopsKey = ""
+
+        func update(_ web: WKWebView, input: TrainMapInput) {
+            lastInput = input
+            // Page pas encore chargée : `didFinish` rejouera la dernière entrée.
+            guard isLoaded else { return }
+
+            let output = geometry.compute(input)
+            var payload: [String: Any] = [
+                "tint": input.tintCSS,
+                "train": input.train.map { [$0.longitude, $0.latitude] as Any } ?? NSNull(),
+            ]
+            if output.linesKey != sentLinesKey {
+                sentLinesKey = output.linesKey
+                payload["travelled"] = output.travelled.map { [$0.longitude, $0.latitude] }
+                payload["remaining"] = output.remaining.map { [$0.longitude, $0.latitude] }
+            }
+            if output.stopsKey != sentStopsKey {
+                sentStopsKey = output.stopsKey
+                payload["stopsKey"] = output.stopsKey
+                payload["stops"] = output.located.compactMap { stop -> [String: Any]? in
+                    guard let coordinate = stop.coordinate else { return nil }
+                    return ["c": [coordinate.longitude, coordinate.latitude],
+                            "label": stop.label,
+                            "status": Self.status(stop.status),
+                            "arrival": stop.id == output.arrivalId]
+                }
+            }
+            if let frame = output.frame {
+                let southWest = MKMapPoint(x: frame.minX, y: frame.maxY).coordinate
+                let northEast = MKMapPoint(x: frame.maxX, y: frame.minY).coordinate
+                payload["bounds"] = [[southWest.longitude, southWest.latitude],
+                                     [northEast.longitude, northEast.latitude]]
+            }
+
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: data, encoding: .utf8)
+            else { return }
+            web.evaluateJavaScript("window.update(\(json))", completionHandler: nil)
+        }
+
+        private static func status(_ status: StopStatus) -> String {
+            switch status {
+            case .passed:   return "passed"
+            case .current:  return "current"
+            case .upcoming: return "upcoming"
+            }
+        }
+
+        // MARK: WKNavigationDelegate
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            isLoaded = true
+            if let lastInput { update(webView, input: lastInput) }
+        }
+
+        /// La page ne quitte jamais la carte : un clic sur un lien éventuel est ignoré.
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            decisionHandler(navigationAction.navigationType == .other ? .allow : .cancel)
+        }
+
+        // MARK: WKScriptMessageHandler
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard let body = message.body as? [String: Any],
+                  let type = body["type"] as? String,
+                  type != "ready"
+            else { return }
+            NSLog("SNCFWifi carte : %@ %@", type, (body["message"] as? String) ?? "")
+        }
+    }
+}
+
+/// `WKUserContentController` retient ses gestionnaires : sans ce relais, le coordinateur (et
+/// donc la vue web) ne serait jamais libéré.
+private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+
+    init(_ target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
+    }
+}
+
+// MARK: - Rendu MapKit (fond de carte Apple, via Internet)
+
+/// `MKMapView` plutôt que la `Map` de SwiftUI : sur macOS 11, cette dernière ne sait pas
+/// dessiner de tracé.
+struct AppleMapView: NSViewRepresentable {
+    let input: TrainMapInput
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -37,27 +358,20 @@ struct TrainMapView: NSViewRepresentable {
     }
 
     func updateNSView(_ map: MKMapView, context: Context) {
-        context.coordinator.update(map, input: self)
+        context.coordinator.update(map, input: input)
     }
-
-    // MARK: - Coordinateur
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         private static let travelledTitle = "parcouru"
 
+        private var geometry = TrainMapGeometry()
         private var tint: NSColor = .controlAccentColor
-        /// Gares, leur état et la gare d'arrivée : tant qu'ils ne changent pas, les pastilles
-        /// ne sont pas redessinées.
         private var stopsKey = ""
         private var travelledLine: MKPolyline?
         private var remainingLine: MKPolyline?
         private var stopAnnotations: [StopAnnotation] = []
         private let trainAnnotation = MKPointAnnotation()
         private var hasTrain = false
-        /// Dernier point du tracé atteint par le train. Le tracé peut repasser près de lui-même
-        /// (rebroussement à Marseille Saint-Charles) : on cherche d'abord devant ce point.
-        private var pathCut = 0
-        private var pathCount = 0
 
         /// Cadre appliqué en dernier, pour ne recadrer que quand le train a assez avancé.
         private var framedRect: MKMapRect?
@@ -67,127 +381,24 @@ struct TrainMapView: NSViewRepresentable {
         private var userMovedAt: Date?
         private let userPause: TimeInterval = 60
 
-        func update(_ map: MKMapView, input: TrainMapView) {
+        func update(_ map: MKMapView, input: TrainMapInput) {
             tint = input.tint
-            let located = input.stops.filter { $0.coordinate != nil }
-            let arrivalIndex = located.firstIndex { $0.id == input.arrivalId }
+            let output = geometry.compute(input)
 
-            updateStops(map, located: located, arrivalId: input.arrivalId)
-
-            if input.routePath.count != pathCount {
-                pathCount = input.routePath.count
-                pathCut = 0
+            if output.stopsKey != stopsKey {
+                stopsKey = output.stopsKey
+                map.removeAnnotations(stopAnnotations)
+                stopAnnotations = output.located.map { StopAnnotation($0, isArrival: $0.id == output.arrivalId) }
+                map.addAnnotations(stopAnnotations)
             }
-            let lines = Self.lines(located: located,
-                                   train: input.train,
-                                   routePath: input.routePath,
-                                   trail: input.trail,
-                                   arrivalIndex: arrivalIndex,
-                                   pathCut: &pathCut)
+
+            let head = [input.train].compactMap { $0 }
             // Dans cet ordre : le parcouru, ajouté en dernier, passe au-dessus du restant.
-            remainingLine = replace(remainingLine, with: lines.remaining, travelled: false, on: map)
-            travelledLine = replace(travelledLine, with: lines.travelled, travelled: true, on: map)
+            remainingLine = replace(remainingLine, with: head + output.remaining, travelled: false, on: map)
+            travelledLine = replace(travelledLine, with: output.travelled + head, travelled: true, on: map)
 
             updateTrain(map, train: input.train)
-            follow(map, points: lines.frame)
-        }
-
-        // MARK: Tracés
-
-        /// Parcouru, restant, et points à cadrer (du train à la gare d'arrivée).
-        private static func lines(located: [StopRow],
-                                  train: CLLocationCoordinate2D?,
-                                  routePath: [CLLocationCoordinate2D],
-                                  trail: [CLLocationCoordinate2D],
-                                  arrivalIndex: Int?,
-                                  pathCut: inout Int)
-            -> (travelled: [CLLocationCoordinate2D], remaining: [CLLocationCoordinate2D], frame: [CLLocationCoordinate2D]) {
-
-            let arrival = arrivalIndex.flatMap { located[$0].coordinate }
-
-            // Tracé publié : on le coupe au point le plus proche du train.
-            if routePath.count > 1 {
-                let here = train ?? located.first { $0.status == .current }?.coordinate
-                let cut = here.map { forwardIndex(in: routePath, to: $0, from: pathCut) } ?? 0
-                pathCut = cut
-                var travelled = Array(routePath[...cut])
-                var remaining = Array(routePath[cut...])
-                if let train {
-                    travelled.append(train)
-                    remaining.insert(train, at: 0)
-                }
-                var frame = [train].compactMap { $0 }
-                if let arrival {
-                    // Gare d'arrivée cherchée devant le train, pour la même raison.
-                    let end = nearest(in: routePath, to: arrival, range: cut..<routePath.count).index
-                    frame += routePath[cut...end]
-                    frame.append(arrival)
-                }
-                return (travelled, remaining, frame)
-            }
-
-            // Sans tracé publié : gares reliées en ligne droite, et positions relevées pour
-            // la portion parcourue depuis le lancement de l'app.
-            let passed = located.filter { $0.status == .passed }.compactMap(\.coordinate)
-            var travelled: [CLLocationCoordinate2D]
-            if trail.count > 1, let start = trail.first {
-                // Gares passées jusqu'à la plus proche du début du relevé, puis le relevé.
-                let joint = passed.isEmpty ? -1 : nearestIndex(in: passed, to: start)
-                travelled = Array(passed.prefix(joint + 1)) + trail
-            } else {
-                travelled = passed
-            }
-            if let train { travelled.append(train) }
-
-            let aheadIndices = located.indices.filter { located[$0].status != .passed }
-            var remaining = aheadIndices.compactMap { located[$0].coordinate }
-            if let train { remaining.insert(train, at: 0) }
-
-            var frame = [train].compactMap { $0 }
-            if let arrivalIndex, let arrival {
-                frame += aheadIndices.filter { $0 <= arrivalIndex }.compactMap { located[$0].coordinate }
-                frame.append(arrival)
-            }
-            return (travelled, remaining, frame)
-        }
-
-        private static func nearestIndex(in path: [CLLocationCoordinate2D], to point: CLLocationCoordinate2D) -> Int {
-            nearest(in: path, to: point, range: path.indices).index
-        }
-
-        /// Point du tracé le plus proche, cherché juste devant le dernier atteint (une
-        /// centaine de kilomètres) : un passage plus loin sur les mêmes voies ne doit pas faire
-        /// sauter le train en avant. Si rien n'est proche (plus de 2 km : app lancée en cours
-        /// de route, GPS qui décroche), on cherche sur tout le tracé.
-        private static func forwardIndex(in path: [CLLocationCoordinate2D],
-                                         to point: CLLocationCoordinate2D,
-                                         from start: Int) -> Int {
-            let lower = min(max(0, start), path.count - 1)
-            let upper = min(path.count, lower + 400)
-            let ahead = nearest(in: path, to: point, range: lower..<upper)
-            // ~2 km, en degrés au carré.
-            let threshold = pow(2_000 / 111_000, 2.0)
-            return ahead.distance < threshold ? ahead.index : nearestIndex(in: path, to: point)
-        }
-
-        private static func nearest(in path: [CLLocationCoordinate2D],
-                                    to point: CLLocationCoordinate2D,
-                                    range: Range<Int>) -> (index: Int, distance: Double) {
-            // Distance au carré en plan local : suffisant pour départager des points voisins.
-            let scale = cos(point.latitude * .pi / 180)
-            var best = range.lowerBound
-            var bestDistance = Double.greatestFiniteMagnitude
-            for index in range {
-                let candidate = path[index]
-                let dx = (candidate.longitude - point.longitude) * scale
-                let dy = candidate.latitude - point.latitude
-                let distance = dx * dx + dy * dy
-                if distance < bestDistance {
-                    bestDistance = distance
-                    best = index
-                }
-            }
-            return (best, bestDistance)
+            if let frame = output.frame { follow(map, rect: frame) }
         }
 
         /// Ajoute le nouveau tracé puis retire l'ancien : pas de clignotement entre les deux.
@@ -208,17 +419,6 @@ struct TrainMapView: NSViewRepresentable {
             return line
         }
 
-        // MARK: Pastilles
-
-        private func updateStops(_ map: MKMapView, located: [StopRow], arrivalId: String?) {
-            let key = located.map { "\($0.id):\($0.status)" }.joined(separator: "|") + "→\(arrivalId ?? "")"
-            guard key != stopsKey else { return }
-            stopsKey = key
-            map.removeAnnotations(stopAnnotations)
-            stopAnnotations = located.map { StopAnnotation($0, isArrival: $0.id == arrivalId) }
-            map.addAnnotations(stopAnnotations)
-        }
-
         private func updateTrain(_ map: MKMapView, train: CLLocationCoordinate2D?) {
             guard let train else {
                 if hasTrain { map.removeAnnotation(trainAnnotation) }
@@ -232,36 +432,19 @@ struct TrainMapView: NSViewRepresentable {
             }
         }
 
-        // MARK: Cadrage
-
-        /// Cadre les points (train → gare d'arrivée). Sans gare d'arrivée, une cinquantaine de
-        /// kilomètres autour du train. Ne recadre que si le cadre a sensiblement changé.
-        private func follow(_ map: MKMapView, points: [CLLocationCoordinate2D]) {
+        /// Ne recadre que si le cadre a sensiblement changé, et jamais pendant la pause qui
+        /// suit un geste.
+        private func follow(_ map: MKMapView, rect: MKMapRect) {
             if let userMovedAt, Date().timeIntervalSince(userMovedAt) < userPause { return }
-            guard !points.isEmpty else { return }
             // Au premier affichage, la carte n'a pas encore de taille : cadrer maintenant
             // donnerait une vue du monde entier. On réessaie une fois la mise en page faite.
             guard !map.bounds.isEmpty else {
                 DispatchQueue.main.async { [weak self, weak map] in
                     guard let self, let map, !map.bounds.isEmpty else { return }
-                    self.follow(map, points: points)
+                    self.follow(map, rect: rect)
                 }
                 return
             }
-
-            let mapPoints = points.map { MKMapPoint($0) }
-            var rect = mapPoints.dropFirst().reduce(MKMapRect(origin: mapPoints[0], size: MKMapSize())) {
-                $0.union(MKMapRect(origin: $1, size: MKMapSize()))
-            }
-            // Jamais plus serré que ~4 km (à l'approche de la gare), ~50 km sans gare d'arrivée.
-            let meters: Double = points.count == 1 ? 50_000 : 4_000
-            let minimum = MKMapPointsPerMeterAtLatitude(points[0].latitude) * meters
-            if rect.size.width < minimum || rect.size.height < minimum {
-                let width = max(rect.size.width, minimum)
-                let height = max(rect.size.height, minimum)
-                rect = MKMapRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height)
-            }
-
             if let framedRect, Self.isClose(framedRect, rect) { return }
             let animated = framedRect != nil
             framedRect = rect
@@ -357,7 +540,7 @@ struct TrainMapView: NSViewRepresentable {
     }
 }
 
-/// Gare placée sur la carte.
+/// Gare placée sur la carte MapKit.
 private final class StopAnnotation: NSObject, MKAnnotation {
     let coordinate: CLLocationCoordinate2D
     let title: String?
