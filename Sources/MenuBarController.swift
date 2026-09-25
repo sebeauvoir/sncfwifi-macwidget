@@ -35,6 +35,15 @@ final class MenuBarController: NSObject {
     private let trailMaxPoints = 20_000
     /// Tracé publié par le réseau, chargé une fois par trajet.
     private var routePath: [CLLocationCoordinate2D] = []
+    /// Distances cumulées le long du tracé, calculées une fois à son arrivée.
+    private var routeCumulative: [CLLocationDistance] = []
+    /// Dernier point du tracé atteint, pour chercher le train devant lui.
+    private var remainingCut = 0
+
+    /// Kilomètres restants jusqu'à la gare d'arrivée choisie, à droite de la vitesse.
+    private var remainingKm: Double?
+    /// Valeur de la source (ICE), en repli quand il n'y a pas de tracé.
+    private var sourceRemainingKm: Double?
 
     /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
@@ -182,11 +191,74 @@ final class MenuBarController: NSObject {
 
     // MARK: - Pastille
 
-    /// La pastille affiche la vitesse du train, avec la jauge de progression du trajet en
+    /// La pastille affiche la vitesse, les kilomètres restants à sa droite quand ils sont
+    /// connus, unités en petit sous les valeurs, et la jauge de progression du trajet en
     /// dessous quand le réseau expose une desserte.
     private func redrawTitle() {
         guard let speedKmh else { return }
-        applyTitleImage(text: "\(speedKmh) km/h", progress: progress, minWidthText: "888 km/h")
+        var readouts = [StatusBarImageGenerator.Readout(value: "\(speedKmh)", unit: "km/h", template: "888")]
+        if let remainingKm {
+            readouts.append(.init(value: DistanceFormat.km(remainingKm), unit: "km", template: "888"))
+        }
+        guard let image = StatusBarImageGenerator.draw(readouts: readouts, progress: progress) else { return }
+        statusItem.button?.title = ""
+        statusItem.button?.image = image
+        statusItem.button?.imagePosition = .imageOnly
+    }
+
+    // MARK: - Kilomètres restants
+
+    /// Met à jour les kilomètres restants de l'état affiché et, s'ils changent à l'affichage,
+    /// la pastille.
+    private func updateRemaining(_ viewState: inout TrainViewState) {
+        let km = remainingDistanceKm(viewState) ?? sourceRemainingKm
+        viewState.remainingKm = km
+        let changed = km.map(DistanceFormat.km) != remainingKm.map(DistanceFormat.km)
+        remainingKm = km
+        if changed { redrawTitle() }
+    }
+
+    /// Distance jusqu'à la gare d'arrivée choisie : le long du tracé quand le réseau le publie,
+    /// sinon la valeur de la source (ICE), sinon de gare en gare en ligne droite.
+    private func remainingDistanceKm(_ viewState: TrainViewState) -> Double? {
+        guard let arrivalId = viewState.selectedArrivalId,
+              let arrivalIndex = viewState.stops.firstIndex(where: { $0.id == arrivalId }),
+              let arrival = viewState.stops[arrivalIndex].coordinate,
+              let train = viewState.trainCoordinate
+        else { return nil }
+
+        if routePath.count > 1, routeCumulative.count == routePath.count {
+            let cut = TrainMapGeometry.forwardIndex(in: routePath, to: train, from: remainingCut)
+            remainingCut = cut
+            let end = TrainMapGeometry.nearest(in: routePath, to: arrival, range: cut..<routePath.count).index
+            let along = routeCumulative[end] - routeCumulative[cut]
+            return (along + Self.distance(train, routePath[cut])) / 1000
+        }
+        if sourceRemainingKm != nil { return nil }
+
+        var total: CLLocationDistance = 0
+        var from = train
+        for stop in viewState.stops[...arrivalIndex] where stop.status != .passed {
+            guard let coordinate = stop.coordinate else { continue }
+            total += Self.distance(from, coordinate)
+            from = coordinate
+        }
+        return total / 1000
+    }
+
+    private static func distance(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> CLLocationDistance {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    }
+
+    private static func cumulative(_ path: [CLLocationCoordinate2D]) -> [CLLocationDistance] {
+        var total: CLLocationDistance = 0
+        var result: [CLLocationDistance] = [0]
+        for index in path.indices.dropFirst() {
+            total += distance(path[index - 1], path[index])
+            result.append(total)
+        }
+        return result
     }
 
     /// Entre deux cycles complets, ne relit que la vitesse et la position : un seul petit
@@ -219,6 +291,7 @@ final class MenuBarController: NSObject {
                     viewState.trainCoordinate = fix.coordinate
                     self.recordTrail(fix.coordinate)
                     viewState.trail = self.trail
+                    self.updateRemaining(&viewState)
                 }
                 self.store.state = .connected(viewState)
             }
@@ -237,13 +310,17 @@ final class MenuBarController: NSObject {
         tripKey = key
         trail = []
         routePath = []
+        routeCumulative = []
+        remainingCut = 0
 
         source.fetchRoutePath { [weak self] path in
             DispatchQueue.main.async {
                 guard let self, self.tripKey == key, let path, path.count > 1 else { return }
                 self.routePath = path
+                self.routeCumulative = Self.cumulative(path)
                 if case .connected(var viewState) = self.store.state {
                     viewState.routePath = path
+                    self.updateRemaining(&viewState)
                     self.store.state = .connected(viewState)
                 }
             }
@@ -259,15 +336,6 @@ final class MenuBarController: NSObject {
         }
         trail.append(coordinate)
         if trail.count > trailMaxPoints { trail.removeFirst(trail.count - trailMaxPoints) }
-    }
-
-    private func applyTitleImage(text: String, progress: Double?, minWidthText: String? = nil) {
-        guard !text.isEmpty,
-              let image = StatusBarImageGenerator.draw(text: text, progress: progress, minWidthText: minWidthText)
-        else { return }
-        statusItem.button?.title = ""
-        statusItem.button?.image = image
-        statusItem.button?.imagePosition = .imageOnly
     }
 
     // MARK: - Détection du réseau
@@ -407,9 +475,12 @@ final class MenuBarController: NSObject {
             guard let self else { return }
             self.speedKmh = nil
             self.progress = nil
+            self.remainingKm = nil
+            self.sourceRemainingKm = nil
             self.tripKey = nil
             self.trail = []
             self.routePath = []
+            self.routeCumulative = []
             self.store.route = .main
             self.store.menu = .idle
             self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
@@ -446,13 +517,15 @@ final class MenuBarController: NSObject {
 
             self.speedKmh = snapshot.viewState.speedKmh
             self.progress = snapshot.badge.progress
-            self.redrawTitle()
 
             var viewState = snapshot.viewState
             self.startTripIfNeeded(viewState, source: source)
             self.recordTrail(viewState.trainCoordinate)
             viewState.trail = self.trail
             viewState.routePath = self.routePath
+            self.sourceRemainingKm = snapshot.viewState.remainingKm
+            self.updateRemaining(&viewState)
+            self.redrawTitle()
             self.publish(.connected(viewState))
         }
     }

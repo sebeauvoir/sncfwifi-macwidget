@@ -191,7 +191,7 @@ struct TrainMapGeometry {
     /// kilomètres) : un passage plus loin sur les mêmes voies ne doit pas faire sauter le train
     /// en avant. Si rien n'est proche (plus de 2 km : app lancée en cours de route, GPS qui
     /// décroche), on cherche sur tout le tracé.
-    private static func forwardIndex(in path: [CLLocationCoordinate2D],
+    static func forwardIndex(in path: [CLLocationCoordinate2D],
                                      to point: CLLocationCoordinate2D,
                                      from start: Int) -> Int {
         let lower = min(max(0, start), path.count - 1)
@@ -202,7 +202,7 @@ struct TrainMapGeometry {
         return ahead.distance < threshold ? ahead.index : nearestIndex(in: path, to: point)
     }
 
-    private static func nearest(in path: [CLLocationCoordinate2D],
+    static func nearest(in path: [CLLocationCoordinate2D],
                                 to point: CLLocationCoordinate2D,
                                 range: Range<Int>) -> (index: Int, distance: Double) {
         // Distance au carré en plan local : suffisant pour départager des points voisins.
@@ -336,11 +336,19 @@ struct LocalTileMapView: NSViewRepresentable {
             if let lastInput { update(webView, input: lastInput) }
         }
 
-        /// La page ne quitte jamais la carte : un clic sur un lien éventuel est ignoré.
+        /// La page ne quitte jamais la carte : un lien (mentions légales) s'ouvre dans le
+        /// navigateur par défaut.
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            decisionHandler(navigationAction.navigationType == .other ? .allow : .cancel)
+            guard navigationAction.navigationType == .other,
+                  navigationAction.targetFrame != nil
+            else {
+                if let url = navigationAction.request.url { NSWorkspace.shared.open(url) }
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
         }
 
         // MARK: WKScriptMessageHandler
@@ -385,7 +393,8 @@ struct AppleMapView: NSViewRepresentable {
         map.delegate = context.coordinator
         map.showsCompass = false
         map.showsZoomControls = false
-        map.showsScale = false
+        // Échelle affichée ; les mentions légales d'Apple le sont d'office par MapKit.
+        map.showsScale = true
         map.showsBuildings = false
         map.isPitchEnabled = false
         map.isRotateEnabled = false
@@ -531,7 +540,8 @@ struct AppleMapView: NSViewRepresentable {
             framedRect = rect
             isFraming = true
             map.setVisibleMapRect(rect,
-                                  edgePadding: NSEdgeInsets(top: 26, left: 26, bottom: 26, right: 26),
+                                  // Marge du bas plus large : l'échelle et les mentions d'Apple y sont.
+                                  edgePadding: NSEdgeInsets(top: 26, left: 26, bottom: 36, right: 26),
                                   animated: animated)
             if !animated { isFraming = false }
         }

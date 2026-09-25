@@ -89,6 +89,10 @@ final class ICEDataSource: TrainDataSource {
         )
         state.selectedArrivalId = arrivalStop?.id
         state.metrics = metrics(for: snap)
+        // Distances réelles fournies par l'API : celle de la gare d'arrivée moins le parcouru.
+        if snap.totalDistanceM > 0, snap.stops.indices.contains(arrivalIndex) {
+            state.remainingKm = Double(max(0, snap.stops[arrivalIndex].distanceFromStart - snap.travelledM)) / 1000
+        }
         state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
 
         let badge = StatusBadge(

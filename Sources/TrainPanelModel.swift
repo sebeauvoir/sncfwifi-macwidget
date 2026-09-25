@@ -119,6 +119,9 @@ struct TrainViewState {
     var trainCoordinate: CLLocationCoordinate2D?
     /// Tracé réel de la ligne, quand le réseau le publie (chargé une fois par trajet).
     var routePath: [CLLocationCoordinate2D] = []
+    /// Kilomètres restants jusqu'à la gare d'arrivée choisie. Posés par la source quand l'API
+    /// les donne (ICE), recalculés chaque seconde par le contrôleur le long du tracé.
+    var remainingKm: Double?
     /// Positions relevées depuis le lancement de l'app sur ce trajet : à défaut de tracé
     /// publié, la portion parcourue suit au moins les voies réellement empruntées.
     var trail: [CLLocationCoordinate2D] = []
@@ -160,6 +163,17 @@ enum DataVolume {
             return String(format: "%.1f Go", locale: .current, megabytes / 1000)
         }
         return String(format: "%.0f Mo", locale: .current, megabytes)
+    }
+}
+
+/// Mise en forme des distances, partagée entre le panneau et la barre des menus.
+enum DistanceFormat {
+    /// « 142 », « 8,4 » : une décimale sous 10 km, séparateur de la locale.
+    static func km(_ value: Double) -> String {
+        let value = max(0, value)
+        return value < 10
+            ? String(format: "%.1f", locale: .current, value)
+            : String(Int(value.rounded()))
     }
 }
 
