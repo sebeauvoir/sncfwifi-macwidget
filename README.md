@@ -32,7 +32,10 @@ horaires théoriques barrés en cas de retard ; une carte du trajet, à la mani�
 relue chaque seconde, cadrage qui suit le train jusqu'à la gare d'arrivée choisie (un zoom ou un
 déplacement à la main suspend le suivi une minute). Le tracé suit les voies quand le réseau le
 publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
-de l'app et le reste relie les gares en ligne droite ; puis les métriques propres au réseau. Un second
+de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
+du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
+autres réseaux n'embarquant pas de tuiles, leur carte utilise le fond Apple, chargé depuis
+Internet ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
 **Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
@@ -80,6 +83,7 @@ SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
 | `GET /router/api/connection/status` | données consommées / restantes, prochaine remise à zéro |
 | `GET /router/api/bar/attendance` | affluence au bar — lue et présente dans le JSON de debug, pas encore affichée |
 | `GET /router/api/train/graph` | tracé des voies du trajet, GeoJSON `LineString` d'origine en terminus (~40 Ko), chargé **une fois par trajet** pour la carte |
+| `GET /karto/style-light.json`, `/maps/*.pmtiles`, `/maps/fonts/…`, `/maps/sprites/…` | fond de carte hors ligne du portail (style MapLibre, tuiles vectorielles PMTiles de l'Europe et des voies ferrées) — voir `Resources/Map/README.md` |
 
 ### 🇪🇺 WiFi Eurostar — transmanche et continental (ex-Thalys)
 

@@ -132,13 +132,17 @@ private struct ConnectedView: View {
                 }
 
                 if showsMap {
-                    TrainMapView(stops: state.stops,
-                                 train: state.trainCoordinate,
-                                 arrivalId: state.selectedArrivalId,
-                                 routePath: state.routePath,
-                                 trail: state.trail,
-                                 tint: NSColor(hex: state.provider.accentHex))
-                        .frame(height: mapHeight)
+                    TrainMapView(
+                        input: TrainMapInput(stops: state.stops,
+                                             train: state.trainCoordinate,
+                                             arrivalId: state.selectedArrivalId,
+                                             routePath: state.routePath,
+                                             trail: state.trail,
+                                             tintHex: state.provider.accentHex),
+                        // Le serveur démo ne sert pas de tuiles : MapKit en mode démo.
+                        localTiles: MockTrainData.shared.isEnabled ? nil : state.provider.mapTilesOrigin
+                    )
+                    .frame(height: mapHeight)
                 }
 
                 if !state.metrics.isEmpty {

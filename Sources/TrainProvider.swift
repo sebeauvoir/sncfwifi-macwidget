@@ -29,6 +29,9 @@ struct TrainProviderDescriptor {
     /// `ombord.info` pointe sur le routeur du train ; sans ce contrôle, une API joignable
     /// depuis l'internet public afficherait un train fantôme.
     var requiresPrivateAPIHost: Bool = false
+    /// Origine du serveur de tuiles embarqué (style `karto/style-light.json`, tuiles PMTiles).
+    /// Renseignée, la carte du panneau n'utilise que lui : aucune requête vers Internet.
+    var mapTilesOrigin: URL? = nil
 }
 
 /// Ce dont les notifications avant arrivée ont besoin, quel que soit le réseau.
