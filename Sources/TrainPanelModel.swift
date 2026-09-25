@@ -219,7 +219,7 @@ final class TrainStore: ObservableObject {
 
     /// Cycle complet (desserte, retard, WiFi, en vrac). Vitesse et position sont, elles,
     /// relues chaque seconde entre deux cycles.
-    static let fullRefreshInterval: TimeInterval = 10
+    static let fullRefreshInterval: TimeInterval = 5
 
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}

@@ -104,7 +104,7 @@ final class LyriaAPIClient {
     }
 
     /// Vitesse (en m/s) et position, depuis le GPS brut. Pas de repli sur `travel/position` :
-    /// le cycle complet s'en charge toutes les 10 s.
+    /// le cycle complet s'en charge toutes les 5 s.
     func fetchLive(completion: @escaping (LiveFix?) -> Void) {
         APIBody.fetch(url: gpsURL, timeout: speedTimeout, ignoreCache: true) { gps in
             guard LyriaAPIClient.looksLikePosition(gps),

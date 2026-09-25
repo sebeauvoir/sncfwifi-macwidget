@@ -47,3 +47,11 @@ Pour chaque modification :
   sinon donner à l'utilisateur les liens et commandes pour le faire lui-même.
 - Si les workflows semblent absents (404 au déclenchement), vérifier qu'Actions est activé
   dans l'onglet Actions du dépôt.
+
+## Pistes pour plus tard
+
+- **Socket.IO du WiFi SNCF** : le portail reçoit ses données en temps réel sur
+  `wss://wifi.sncf/socket.io/` (namespace `/router/api/pepita`). Événements relevés dans un HAR
+  à bord : `gps` (≈ 1 Hz, même contenu que `train/gps`), `connected_devices`, `trainDetails`,
+  `trainProgress`, `trainGraph`, `modulesConfiguration`. S'y abonner remplacerait la relecture
+  de la vitesse chaque seconde et le cycle complet (aujourd'hui toutes les 5 s).
