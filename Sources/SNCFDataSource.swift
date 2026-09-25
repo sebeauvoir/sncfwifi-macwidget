@@ -334,17 +334,17 @@ final class SNCFDataSource: TrainDataSource {
                               arrivalIndex: Int?,
                               speedKmh: Int,
                               bar: [String: Any]?,
-                              status: [String: Any]?) -> [MetricRow] {
-        var rows: [MetricRow] = []
+                              status: [String: Any]?) -> [ExtraMetric] {
+        var tiles: [ExtraMetric] = []
 
         if let altitude = APIValue.double(gps?["altitude"]) {
-            rows.append(MetricRow(id: "altitude", symbol: "mountain.2",
-                                  text: "\(Int(altitude.rounded())) m d'altitude", span: .half))
+            tiles.append(ExtraMetric(id: "altitude", symbol: "mountain.2",
+                                     label: "Altitude", value: "\(Int(altitude.rounded())) m"))
         }
         // Le cap n'a pas de sens à l'arrêt : le GPS dérive.
         if let heading = APIValue.double(gps?["heading"]), speedKmh > 0 {
-            rows.append(MetricRow(id: "heading", symbol: "location.north.fill",
-                                  text: "Cap \(Compass.cardinal(heading)) (\(Int(heading.rounded()))°)", span: .half))
+            tiles.append(ExtraMetric(id: "heading", symbol: "location.north.fill",
+                                     label: "Cap", value: "\(Compass.cardinal(heading)) · \(Int(heading.rounded()))°"))
         }
 
         // Chaque arrêt porte la progression du tronçon qui le relie au suivant.
@@ -352,16 +352,16 @@ final class SNCFDataSource: TrainDataSource {
             (stop["progress"] as? [String: Any]).flatMap { APIValue.double($0["traveledDistance"]) }
         }.reduce(0, +)
         if travelled > 0 {
-            rows.append(MetricRow(id: "travelled", symbol: "point.topleft.down.curvedto.point.bottomright.up",
-                                  text: "\(DistanceFormat.km(travelled / 1000)) km parcourus", span: .half))
+            tiles.append(ExtraMetric(id: "travelled", symbol: "point.topleft.down.curvedto.point.bottomright.up",
+                                     label: "Parcouru", value: "\(DistanceFormat.km(travelled / 1000)) km"))
         }
         if let first = stops.first,
            let departure = APIValue.date(first["realDate"] as? String ?? first["theoricDate"] as? String) {
             let elapsed = Date().timeIntervalSince(departure)
             // Trop tôt après le départ, la moyenne ne veut rien dire.
             if elapsed > 180, travelled > 1000 {
-                rows.append(MetricRow(id: "average", symbol: "speedometer",
-                                      text: "Moyenne \(Int((travelled / elapsed * 3.6).rounded())) km/h", span: .half))
+                tiles.append(ExtraMetric(id: "average", symbol: "speedometer",
+                                         label: "Vitesse moyenne", value: "\(Int((travelled / elapsed * 3.6).rounded())) km/h"))
             }
         }
 
@@ -370,23 +370,26 @@ final class SNCFDataSource: TrainDataSource {
             if let date = APIValue.date(arrival["realDate"] as? String ?? arrival["theoricDate"] as? String),
                date > Date() {
                 let label = shortStationName((arrival["label"] as? String) ?? "")
-                rows.append(MetricRow(id: "time-left", symbol: "clock",
-                                      text: "\(label) dans \(Self.duration(date.timeIntervalSinceNow))", span: .half))
+                tiles.append(ExtraMetric(id: "time-left", symbol: "clock",
+                                         label: "Arrivée à \(label)", value: "dans \(Self.duration(date.timeIntervalSinceNow))"))
             }
         }
 
         // Unité non documentée : 100 000 relevé à bord, lu comme des kbit/s.
         if let bandwidth = APIValue.double(status?["granted_bandwidth"]), bandwidth > 0 {
-            rows.append(MetricRow(id: "bandwidth", symbol: "arrow.down.circle",
-                                  text: "Débit accordé \(Int((bandwidth / 1000).rounded())) Mbit/s", span: .half))
+            tiles.append(ExtraMetric(id: "bandwidth", symbol: "arrow.down.circle",
+                                     label: "Débit accordé", value: "\(Int((bandwidth / 1000).rounded())) Mbit/s"))
         }
         if let empty = bar?["isBarQueueEmpty"] as? Bool {
-            rows.append(MetricRow(id: "bar", symbol: "cup.and.saucer.fill",
-                                  text: empty ? "Bar : pas d'attente" : "Bar : file d'attente", span: .half))
+            tiles.append(ExtraMetric(id: "bar", symbol: "cup.and.saucer.fill",
+                                     label: "Bar", value: empty ? "Pas d'attente" : "File d'attente"))
         }
-
-        if let co2 = co2Text() {
-            rows.append(MetricRow(id: "co2", symbol: "leaf.fill", text: co2))
+        if let co2 = co2Percent() {
+            tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
+                                     label: "CO₂ vs voiture", value: "−\(co2) %"))
+        }
+        if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
+            tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
         }
 
         // Durées d'arrêt annoncées, gares intermédiaires seulement.
@@ -396,18 +399,15 @@ final class SNCFDataSource: TrainDataSource {
             return "\(shortStationName(label)) \(minutes) min"
         }
         if !dwells.isEmpty {
-            rows.append(MetricRow(id: "dwell", symbol: "stopwatch", text: "Arrêts : " + dwells.joined(separator: " · ")))
+            tiles.append(ExtraMetric(id: "dwell", symbol: "stopwatch", label: "Durées d'arrêt",
+                                     value: dwells.joined(separator: " · "), wide: true))
         }
-
-        if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
-            rows.append(.footnote("Rame \(rame)"))
-        }
-        return rows
+        return tiles
     }
 
-    /// « 97 % de CO₂ en moins qu'en voiture », d'après la table du portail et les codes UIC du
-    /// trajet. Le portail cherche le couple dans les deux sens.
-    private func co2Text() -> String? {
+    /// Part de CO₂ évitée par rapport à la voiture (« 97 »), d'après la table du portail et les
+    /// codes UIC du trajet. Le portail cherche le couple dans les deux sens.
+    private func co2Percent() -> String? {
         guard let codes = client.lastDetails?["stationUicCodes"] as? [String: Any],
               let departure = codes["departure"] as? String,
               let arrival = codes["arrival"] as? String,
@@ -421,7 +421,7 @@ final class SNCFDataSource: TrainDataSource {
         guard let value = (entry?["co2"] as? String)?.replacingOccurrences(of: "%", with: ""),
               !value.isEmpty
         else { return nil }
-        return "\(value) % de CO₂ en moins qu'en voiture"
+        return value.trimmingCharacters(in: .whitespaces)
     }
 
     /// « 1h02 », « 45 min ».

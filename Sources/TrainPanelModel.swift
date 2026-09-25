@@ -61,6 +61,16 @@ struct MetricRow: Identifiable {
     }
 }
 
+/// Tuile de la section « En vrac » : petit libellé au-dessus, valeur en gras.
+struct ExtraMetric: Identifiable {
+    let id: String
+    let symbol: String
+    let label: String
+    let value: String
+    /// Pleine largeur, valeur sur plusieurs lignes (durées d'arrêt).
+    var wide = false
+}
+
 /// Carte du bar-restaurant, chargée à la demande et non à chaque cycle.
 struct OnboardMenu {
     struct Item: Identifiable {
@@ -138,7 +148,7 @@ struct TrainViewState {
 
     var metrics: [MetricRow] = []
     /// Données brutes supplémentaires, en vrac en bas du panneau (altitude, cap, débit…).
-    var extraMetrics: [MetricRow] = []
+    var extraMetrics: [ExtraMetric] = []
 
     var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
@@ -205,7 +215,11 @@ final class TrainStore: ObservableObject {
     @Published var route: PanelRoute = .main
     @Published var menu: MenuState = .idle
     /// Doit refléter le Timer du contrôleur.
-    let refreshInterval: TimeInterval = 30
+    let refreshInterval: TimeInterval = TrainStore.fullRefreshInterval
+
+    /// Cycle complet (desserte, retard, WiFi, en vrac). Vitesse et position sont, elles,
+    /// relues chaque seconde entre deux cycles.
+    static let fullRefreshInterval: TimeInterval = 10
 
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}

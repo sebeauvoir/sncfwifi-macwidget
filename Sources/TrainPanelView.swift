@@ -166,7 +166,7 @@ private struct ConnectedView: View {
                         Text("En vrac")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(.secondary)
-                        MetricsView(rows: state.extraMetrics, tint: state.provider.accent)
+                        ExtraMetricsView(tiles: state.extraMetrics, tint: state.provider.accent)
                     }
                 }
 
@@ -338,6 +338,49 @@ private struct MetricsView: View {
         }
         flush()
         return groups
+    }
+}
+
+// MARK: - En vrac
+
+/// Tuiles façon tableau de bord : deux colonnes, libellé discret au-dessus, valeur en gras sur
+/// une ligne. Les tuiles larges (durées d'arrêt) prennent toute la largeur en dessous.
+private struct ExtraMetricsView: View {
+    let tiles: [ExtraMetric]
+    let tint: Color
+
+    private let columns = [GridItem(.flexible(), spacing: 12, alignment: .topLeading),
+                           GridItem(.flexible(), spacing: 12, alignment: .topLeading)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                ForEach(tiles.filter { !$0.wide }) { tile($0) }
+            }
+            ForEach(tiles.filter(\.wide)) { tile($0) }
+        }
+    }
+
+    private func tile(_ metric: ExtraMetric) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: metric.symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 14)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(metric.label)
+                    .font(.system(size: 9.5))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Text(metric.value)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(metric.wide ? nil : 1)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: metric.wide)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
