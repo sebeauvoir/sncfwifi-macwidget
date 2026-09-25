@@ -16,12 +16,44 @@ struct TrainMapView: View {
     /// Origine du serveur de tuiles embarqué (`https://wifi.sncf/`), `nil` s'il n'y en a pas.
     let localTiles: URL?
 
+    /// Mode suivi : train au centre, carte fixe, zoom seul. Sinon, cadrage train → gare
+    /// d'arrivée. Mémorisé d'une ouverture à l'autre.
+    @AppStorage("mapFollowMode") private var follow = false
+
     var body: some View {
+        ZStack(alignment: .topTrailing) {
+            map
+            modeButton
+                .padding(6)
+        }
+    }
+
+    @ViewBuilder
+    private var map: some View {
+        let input = self.input.with(follow: follow)
         if let localTiles, LocalTileMapView.html != nil {
             LocalTileMapView(input: input, origin: localTiles)
         } else {
             AppleMapView(input: input)
         }
+    }
+
+    /// Le pictogramme montre le mode en cours ; l'infobulle dit ce que fait le clic.
+    private var modeButton: some View {
+        Button {
+            follow.toggle()
+        } label: {
+            Image(systemName: follow ? "location.fill" : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(follow ? Color(NSColor(hex: input.tintHex)) : .primary)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color(NSColor.windowBackgroundColor).opacity(0.92)))
+                .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .shadow(color: Color.black.opacity(0.18), radius: 2, y: 1)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .help(follow ? "Suivi du train — cliquer pour voir le trajet jusqu'à la gare d'arrivée"
+                     : "Trajet jusqu'à la gare d'arrivée — cliquer pour suivre le train")
     }
 }
 
@@ -33,6 +65,14 @@ struct TrainMapInput {
     let routePath: [CLLocationCoordinate2D]
     let trail: [CLLocationCoordinate2D]
     let tintHex: UInt32
+    /// Mode suivi, posé par `TrainMapView` d'après le bouton.
+    var follow = false
+
+    func with(follow: Bool) -> TrainMapInput {
+        var copy = self
+        copy.follow = follow
+        return copy
+    }
 
     var tint: NSColor { NSColor(hex: tintHex) }
     var tintCSS: String { String(format: "#%06X", tintHex) }
@@ -248,6 +288,7 @@ struct LocalTileMapView: NSViewRepresentable {
 
             let output = geometry.compute(input)
             var payload: [String: Any] = [
+                "mode": input.follow ? "follow" : "overview",
                 "tint": input.tintCSS,
                 "train": input.train.map { [$0.longitude, $0.latitude] as Any } ?? NSNull(),
             ]
@@ -380,10 +421,16 @@ struct AppleMapView: NSViewRepresentable {
         /// Après un zoom ou un déplacement à la main, le suivi s'efface une minute.
         private var userMovedAt: Date?
         private let userPause: TimeInterval = 60
+        /// Mode suivi, et train à garder au centre après un zoom.
+        private var isFollowing = false
+        private var followedTrain: CLLocationCoordinate2D?
+        /// Étendue du suivi au premier passage : une quinzaine de kilomètres.
+        private let followSpan: CLLocationDistance = 15_000
 
         func update(_ map: MKMapView, input: TrainMapInput) {
             tint = input.tint
             let output = geometry.compute(input)
+            applyMode(map, follow: input.follow)
 
             if output.stopsKey != stopsKey {
                 stopsKey = output.stopsKey
@@ -398,7 +445,41 @@ struct AppleMapView: NSViewRepresentable {
             travelledLine = replace(travelledLine, with: output.travelled + head, travelled: true, on: map)
 
             updateTrain(map, train: input.train)
-            if let frame = output.frame { follow(map, rect: frame) }
+            if isFollowing {
+                center(map, on: input.train)
+            } else if let frame = output.frame {
+                follow(map, rect: frame)
+            }
+        }
+
+        /// Suivi : la carte ne se déplace plus, seul le zoom reste permis.
+        private func applyMode(_ map: MKMapView, follow: Bool) {
+            guard follow != isFollowing else { return }
+            isFollowing = follow
+            map.isScrollEnabled = !follow
+            if follow {
+                followedTrain = nil
+            } else {
+                // Retour au cadrage train → gare d'arrivée, sans attendre la fin d'une pause.
+                framedRect = nil
+                userMovedAt = nil
+            }
+        }
+
+        private func center(_ map: MKMapView, on train: CLLocationCoordinate2D?) {
+            guard let train else { return }
+            let first = followedTrain == nil
+            followedTrain = train
+            isFraming = true
+            if first {
+                map.setRegion(MKCoordinateRegion(center: train,
+                                                 latitudinalMeters: followSpan,
+                                                 longitudinalMeters: followSpan),
+                              animated: false)
+                isFraming = false
+            } else {
+                map.setCenter(train, animated: true)
+            }
         }
 
         /// Ajoute le nouveau tracé puis retire l'ancien : pas de clignotement entre les deux.
@@ -470,7 +551,15 @@ struct AppleMapView: NSViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            let byUser = !isFraming
             isFraming = false
+            // Suivi : un zoom au pincement se fait autour du pointeur ; on ramène le train
+            // au centre aussitôt.
+            if isFollowing, byUser, let followedTrain {
+                isFraming = true
+                mapView.setCenter(followedTrain, animated: false)
+                isFraming = false
+            }
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {

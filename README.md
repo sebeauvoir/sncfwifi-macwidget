@@ -29,8 +29,10 @@ Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 **Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
 horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
 `wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
-relue chaque seconde, cadrage qui suit le train jusqu'à la gare d'arrivée choisie (un zoom ou un
-déplacement à la main suspend le suivi une minute). Le tracé suit les voies quand le réseau le
+relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
+du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
+main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
+et seul le zoom reste permis. Le tracé suit les voies quand le réseau le
 publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
