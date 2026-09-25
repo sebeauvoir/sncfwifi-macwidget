@@ -27,7 +27,7 @@ kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` de
 l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
 seconde de la distance parcourue d'après le GPS entre deux lectures ; à défaut, le long du tracé
 publié (Lyria) ou de gare en gare. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
-données est rafraîchi toutes les 10 s.
+données est rafraîchi toutes les 5 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
 **Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte complète avec les
