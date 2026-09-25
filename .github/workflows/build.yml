@@ -70,7 +70,19 @@ jobs:
       - name: Package app
         run: zip -r SNCFWifi.zip SNCFWifi.app
 
+      # Seuls `main` et les tags `v*` publient une release. Un build lancé à la main depuis une
+      # autre branche est un build de test : le zip part en artefact du run, sans tag ni
+      # release à nettoyer ensuite.
+      - name: Déposer le build de test
+        if: github.ref != 'refs/heads/main' && github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SNCFWifi-test-${{ github.run_number }}  # pas de ref_name : « / » interdit
+          path: SNCFWifi.zip
+          retention-days: 14
+
       - name: Rédiger le changelog
+        if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
         env:
           PREVIOUS: ${{ steps.version.outputs.previous }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -80,6 +92,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Publier la release
+        if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
