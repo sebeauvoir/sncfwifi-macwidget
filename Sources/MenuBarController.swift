@@ -10,17 +10,14 @@ final class MenuBarController: NSObject {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var timer: Timer?
-    private var clockTimer: Timer?
     private var lastRawData: [String: Any]?
 
     private let store = TrainStore()
     private let popover = NSPopover()
     private lazy var panelHost = NSHostingController(rootView: AnyView(TrainPanelView().environmentObject(store)))
 
-    /// Pastille courante : le `clockTimer` la redessine toutes les 10 s sans rappeler l'API.
-    /// `nil` = pas de train : sans ça, le redraw périodique réafficherait le train précédent
-    /// par-dessus l'icône « réseau inconnu ».
-    private var badge: StatusBadge?
+    /// Vitesse affichée dans la pastille. `nil` = pas de train (icône « réseau inconnu »).
+    private var speedKmh: Int?
 
     /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
@@ -94,9 +91,6 @@ final class MenuBarController: NSObject {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.refresh()
         }
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            self?.redrawTitle()
-        }
     }
 
     // MARK: - Popover
@@ -168,22 +162,10 @@ final class MenuBarController: NSObject {
 
     // MARK: - Pastille
 
-    @objc private func redrawTitle() {
-        guard let badge else { return }
-        if let delayTitle = badge.delayTitle {
-            // Le retard s'affiche 5 s, puis on repasse au texte normal.
-            applyTitleImage(text: delayTitle, progress: badge.progress)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                self?.redrawNormalTitle()
-            }
-        } else {
-            redrawNormalTitle()
-        }
-    }
-
-    private func redrawNormalTitle() {
-        guard let badge else { return }
-        applyTitleImage(text: badge.title(), progress: badge.progress)
+    /// La pastille n'affiche que la vitesse du train, quel que soit le réseau.
+    private func redrawTitle() {
+        guard let speedKmh else { return }
+        applyTitleImage(text: "\(speedKmh) km/h", progress: nil)
     }
 
     private func applyTitleImage(text: String, progress: Double?) {
@@ -330,7 +312,7 @@ final class MenuBarController: NSObject {
     private func showNotConnected() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.badge = nil
+            self.speedKmh = nil
             self.store.route = .main
             self.store.menu = .idle
             self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
@@ -365,7 +347,7 @@ final class MenuBarController: NSObject {
             }
             self.notifyPlatformChangeIfNeeded(snapshot: snapshot)
 
-            self.badge = snapshot.badge
+            self.speedKmh = snapshot.viewState.speedKmh
             self.redrawTitle()
             self.publish(.connected(snapshot.viewState))
         }

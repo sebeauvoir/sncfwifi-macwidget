@@ -17,11 +17,9 @@ qui est disponible dans chaque train.
 
 ## Le widget 🖥️
 
-**Pastille** — prochain arrêt et temps restant avec une jauge de progression (`Berlin · 3h18`), ou
-`En gare de Lyon` à l'arrêt. Le retard, quand le réseau le donne, s'y intercale 5 s
-(`⚠ +12min · Régulation du trafic`). Sans desserte, elle affiche la vitesse
-(`Eurostar · 278 km/h`) et n'a pas de jauge. Sa largeur est plafonnée, avec troncature, pour
-rester lisible quand la barre de menus est pleine.
+**Pastille** — la vitesse du train, en permanence et sur tous les réseaux (`278 km/h`,
+`0 km/h` à l'arrêt). Elle est mise à jour à chaque interrogation de l'API (toutes les 30 s).
+Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
 **Panneau** — numéro de train, destination et vitesse en en-tête ; desserte complète avec les
 horaires théoriques barrés en cas de retard ; puis les métriques propres au réseau. Un second
