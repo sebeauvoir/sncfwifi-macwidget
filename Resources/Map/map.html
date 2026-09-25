@@ -44,6 +44,12 @@ let stopMarkers = [];
 let stopsKey = "";
 let framed = null;
 let userMovedAt = 0;
+// « overview » : train → gare d'arrivée, zoom automatique. « follow » : train au centre,
+// carte fixe, zoom seul.
+let mode = "overview";
+let followZoom = 11;
+let followPlaced = false;
+try { followZoom = Number(localStorage.getItem("followZoom")) || followZoom; } catch (e) {}
 
 // Le style du portail vise « http://localhost:8000 » : le portail réécrit ces adresses vers
 // sa propre origine, on fait de même.
@@ -88,6 +94,13 @@ async function start() {
   map.on("movestart", (event) => {
     // Seuls les gestes portent un événement d'origine ; les recadrages du suivi, non.
     if (event.originalEvent) userMovedAt = Date.now();
+  });
+  map.on("zoomend", () => {
+    if (mode !== "follow") return;
+    followZoom = map.getZoom();
+    try { localStorage.setItem("followZoom", String(followZoom)); } catch (e) {}
+    // Un zoom pendant le glissement l'interrompt à mi-course : on remet le train au centre.
+    if (train) map.jumpTo({ center: train });
   });
   map.on("error", (event) => post({ type: "error", message: String(event.error && event.error.message) }));
 
@@ -164,8 +177,55 @@ window.update = function (payload) {
     trainMarker = null;
   }
 
-  if (payload.bounds) follow(payload.bounds);
+  if (payload.mode) applyMode(payload.mode);
+  if (mode === "follow") {
+    center();
+  } else if (payload.bounds) {
+    follow(payload.bounds);
+  }
 };
+
+// Suivi : ni déplacement ni zoom ailleurs qu'au centre, où se tient le train.
+function applyMode(next) {
+  if (next === mode) return;
+  mode = next;
+  if (mode === "follow") {
+    map.dragPan.disable();
+    map.boxZoom.disable();
+    map.doubleClickZoom.disable();
+    map.keyboard.disable();
+    map.scrollZoom.enable({ around: "center" });
+    map.touchZoomRotate.enable({ around: "center" });
+    followPlaced = false;
+  } else {
+    map.dragPan.enable();
+    map.boxZoom.enable();
+    map.doubleClickZoom.enable();
+    map.keyboard.enable();
+    map.scrollZoom.enable();
+    map.touchZoomRotate.enable();
+    // Retour au cadrage train → gare d'arrivée, sans attendre la fin d'une pause.
+    framed = null;
+    userMovedAt = 0;
+  }
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+}
+
+// Garde le train au centre. Glissement linéaire d'une seconde, au rythme des positions :
+// la carte défile en continu sous le train.
+function center() {
+  if (!train) return;
+  if (!followPlaced) {
+    followPlaced = true;
+    map.jumpTo({ center: train, zoom: followZoom });
+    return;
+  }
+  const here = map.project(map.getCenter());
+  const there = map.project(train);
+  if (Math.hypot(here.x - there.x, here.y - there.y) < 0.5) return;
+  map.easeTo({ center: train, duration: 1000, easing: (t) => t });
+}
 
 // Cadre train → gare d'arrivée, sauf pendant la pause qui suit un geste. Un écart de moins de
 // 5 % du cadre ne vaut pas de bouger la carte.
