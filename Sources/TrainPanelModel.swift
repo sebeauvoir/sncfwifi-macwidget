@@ -137,6 +137,8 @@ struct TrainViewState {
     var dataResetTime: String? // "HH:mm"
 
     var metrics: [MetricRow] = []
+    /// Données brutes supplémentaires, en vrac en bas du panneau (altitude, cap, débit…).
+    var extraMetrics: [MetricRow] = []
 
     var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
@@ -163,6 +165,17 @@ enum DataVolume {
             return String(format: "%.1f Go", locale: .current, megabytes / 1000)
         }
         return String(format: "%.0f Mo", locale: .current, megabytes)
+    }
+}
+
+/// Cap en degrés → point cardinal français (16 secteurs, « O » pour ouest).
+enum Compass {
+    static func cardinal(_ degrees: Double) -> String {
+        let names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                     "S", "SSO", "SO", "OSO", "O", "ONO", "NO", "NNO"]
+        let normalized = degrees.truncatingRemainder(dividingBy: 360)
+        let positive = normalized < 0 ? normalized + 360 : normalized
+        return names[Int((positive / 22.5).rounded()) % names.count]
     }
 }
 

@@ -160,6 +160,16 @@ private struct ConnectedView: View {
                     }
                 }
 
+                if !state.extraMetrics.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("En vrac")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        MetricsView(rows: state.extraMetrics, tint: state.provider.accent)
+                    }
+                }
+
                 RefreshStatusView()
                     .padding(.top, 2)
             }

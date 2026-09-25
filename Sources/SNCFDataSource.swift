@@ -307,6 +307,13 @@ final class SNCFDataSource: TrainDataSource {
             }
         }
 
+        viewState.extraMetrics = extraMetrics(gps: gps,
+                                              stops: allStops,
+                                              arrivalIndex: journey?.selectedArrivalIndex,
+                                              speedKmh: speed,
+                                              bar: bar,
+                                              status: status)
+
 
         var payloads: [String: Any] = [:]
         if let gps { payloads["gps"] = gps }
@@ -319,6 +326,112 @@ final class SNCFDataSource: TrainDataSource {
     }
 
     /// Noms de gares raccourcis pour tenir dans la pastille de la barre de menus.
+    // MARK: - Données en vrac
+
+    /// Tout ce que l'API donne en plus, en vrac en bas du panneau.
+    private func extraMetrics(gps: [String: Any]?,
+                              stops: [[String: Any]],
+                              arrivalIndex: Int?,
+                              speedKmh: Int,
+                              bar: [String: Any]?,
+                              status: [String: Any]?) -> [MetricRow] {
+        var rows: [MetricRow] = []
+
+        if let altitude = APIValue.double(gps?["altitude"]) {
+            rows.append(MetricRow(id: "altitude", symbol: "mountain.2",
+                                  text: "\(Int(altitude.rounded())) m d'altitude", span: .half))
+        }
+        // Le cap n'a pas de sens à l'arrêt : le GPS dérive.
+        if let heading = APIValue.double(gps?["heading"]), speedKmh > 0 {
+            rows.append(MetricRow(id: "heading", symbol: "location.north.fill",
+                                  text: "Cap \(Compass.cardinal(heading)) (\(Int(heading.rounded()))°)", span: .half))
+        }
+
+        // Chaque arrêt porte la progression du tronçon qui le relie au suivant.
+        let travelled = stops.dropLast().compactMap { stop in
+            (stop["progress"] as? [String: Any]).flatMap { APIValue.double($0["traveledDistance"]) }
+        }.reduce(0, +)
+        if travelled > 0 {
+            rows.append(MetricRow(id: "travelled", symbol: "point.topleft.down.curvedto.point.bottomright.up",
+                                  text: "\(DistanceFormat.km(travelled / 1000)) km parcourus", span: .half))
+        }
+        if let first = stops.first,
+           let departure = APIValue.date(first["realDate"] as? String ?? first["theoricDate"] as? String) {
+            let elapsed = Date().timeIntervalSince(departure)
+            // Trop tôt après le départ, la moyenne ne veut rien dire.
+            if elapsed > 180, travelled > 1000 {
+                rows.append(MetricRow(id: "average", symbol: "speedometer",
+                                      text: "Moyenne \(Int((travelled / elapsed * 3.6).rounded())) km/h", span: .half))
+            }
+        }
+
+        if let arrivalIndex, stops.indices.contains(arrivalIndex) {
+            let arrival = stops[arrivalIndex]
+            if let date = APIValue.date(arrival["realDate"] as? String ?? arrival["theoricDate"] as? String),
+               date > Date() {
+                let label = shortStationName((arrival["label"] as? String) ?? "")
+                rows.append(MetricRow(id: "time-left", symbol: "clock",
+                                      text: "\(label) dans \(Self.duration(date.timeIntervalSinceNow))", span: .half))
+            }
+        }
+
+        // Unité non documentée : 100 000 relevé à bord, lu comme des kbit/s.
+        if let bandwidth = APIValue.double(status?["granted_bandwidth"]), bandwidth > 0 {
+            rows.append(MetricRow(id: "bandwidth", symbol: "arrow.down.circle",
+                                  text: "Débit accordé \(Int((bandwidth / 1000).rounded())) Mbit/s", span: .half))
+        }
+        if let empty = bar?["isBarQueueEmpty"] as? Bool {
+            rows.append(MetricRow(id: "bar", symbol: "cup.and.saucer.fill",
+                                  text: empty ? "Bar : pas d'attente" : "Bar : file d'attente", span: .half))
+        }
+
+        if let co2 = co2Text() {
+            rows.append(MetricRow(id: "co2", symbol: "leaf.fill", text: co2))
+        }
+
+        // Durées d'arrêt annoncées, gares intermédiaires seulement.
+        let dwells = stops.dropFirst().dropLast().compactMap { stop -> String? in
+            let minutes = APIValue.int(stop["duration"])
+            guard minutes > 0, let label = stop["label"] as? String else { return nil }
+            return "\(shortStationName(label)) \(minutes) min"
+        }
+        if !dwells.isEmpty {
+            rows.append(MetricRow(id: "dwell", symbol: "stopwatch", text: "Arrêts : " + dwells.joined(separator: " · ")))
+        }
+
+        if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
+            rows.append(.footnote("Rame \(rame)"))
+        }
+        return rows
+    }
+
+    /// « 97 % de CO₂ en moins qu'en voiture », d'après la table du portail et les codes UIC du
+    /// trajet. Le portail cherche le couple dans les deux sens.
+    private func co2Text() -> String? {
+        guard let codes = client.lastDetails?["stationUicCodes"] as? [String: Any],
+              let departure = codes["departure"] as? String,
+              let arrival = codes["arrival"] as? String,
+              let table = client.co2Table
+        else { return nil }
+        let entry = table.first { row in
+            let origin = row["origine_uic"] as? String
+            let destination = row["destination_uic"] as? String
+            return (origin == departure && destination == arrival) || (origin == arrival && destination == departure)
+        }
+        guard let value = (entry?["co2"] as? String)?.replacingOccurrences(of: "%", with: ""),
+              !value.isEmpty
+        else { return nil }
+        return "\(value) % de CO₂ en moins qu'en voiture"
+    }
+
+    /// « 1h02 », « 45 min ».
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        guard minutes >= 60 else { return "\(max(1, minutes)) min" }
+        let rest = minutes % 60
+        return rest > 0 ? "\(minutes / 60)h\(String(format: "%02d", rest))" : "\(minutes / 60)h"
+    }
+
     private func shortStationName(_ name: String) -> String {
         if let short = SNCFDataSource.shortNames[name] { return short }
         if name.count <= 15 { return name }
