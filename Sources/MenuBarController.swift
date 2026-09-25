@@ -26,6 +26,16 @@ final class MenuBarController: NSObject {
     /// Progression du trajet, dessinée sous la vitesse. `nil` = réseau sans desserte, pas de jauge.
     private var progress: Double?
 
+    /// Trajet courant (réseau, train, gare d'origine) : un changement remet à zéro le relevé
+    /// des positions et le tracé.
+    private var tripKey: String?
+    /// Positions relevées sur ce trajet, pour la carte.
+    private var trail: [CLLocationCoordinate2D] = []
+    private let trailMinStep: CLLocationDistance = 25
+    private let trailMaxPoints = 20_000
+    /// Tracé publié par le réseau, chargé une fois par trajet.
+    private var routePath: [CLLocationCoordinate2D] = []
+
     /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
     private var refreshToken = 0
@@ -205,10 +215,50 @@ final class MenuBarController: NSObject {
                 } ?? false
                 guard moved || viewState.speedKmh != fix.speedKmh else { return }
                 viewState.speedKmh = fix.speedKmh
-                if moved { viewState.trainCoordinate = fix.coordinate }
+                if moved {
+                    viewState.trainCoordinate = fix.coordinate
+                    self.recordTrail(fix.coordinate)
+                    viewState.trail = self.trail
+                }
                 self.store.state = .connected(viewState)
             }
         }
+    }
+
+    // MARK: - Carte : trajet, relevé des positions, tracé
+
+    /// Nouveau trajet : on oublie le relevé et le tracé du précédent, puis on demande le tracé
+    /// une seule fois (il pèse plusieurs dizaines de Ko).
+    private func startTripIfNeeded(_ viewState: TrainViewState, source: TrainDataSource) {
+        let key = [viewState.provider.id,
+                   viewState.trainNumber ?? "",
+                   viewState.stops.first?.id ?? ""].joined(separator: "|")
+        guard key != tripKey else { return }
+        tripKey = key
+        trail = []
+        routePath = []
+
+        source.fetchRoutePath { [weak self] path in
+            DispatchQueue.main.async {
+                guard let self, self.tripKey == key, let path, path.count > 1 else { return }
+                self.routePath = path
+                if case .connected(var viewState) = self.store.state {
+                    viewState.routePath = path
+                    self.store.state = .connected(viewState)
+                }
+            }
+        }
+    }
+
+    private func recordTrail(_ coordinate: CLLocationCoordinate2D?) {
+        guard let coordinate else { return }
+        if let last = trail.last,
+           CLLocation(latitude: last.latitude, longitude: last.longitude)
+               .distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)) < trailMinStep {
+            return
+        }
+        trail.append(coordinate)
+        if trail.count > trailMaxPoints { trail.removeFirst(trail.count - trailMaxPoints) }
     }
 
     private func applyTitleImage(text: String, progress: Double?, minWidthText: String? = nil) {
@@ -357,6 +407,9 @@ final class MenuBarController: NSObject {
             guard let self else { return }
             self.speedKmh = nil
             self.progress = nil
+            self.tripKey = nil
+            self.trail = []
+            self.routePath = []
             self.store.route = .main
             self.store.menu = .idle
             self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
@@ -394,7 +447,13 @@ final class MenuBarController: NSObject {
             self.speedKmh = snapshot.viewState.speedKmh
             self.progress = snapshot.badge.progress
             self.redrawTitle()
-            self.publish(.connected(snapshot.viewState))
+
+            var viewState = snapshot.viewState
+            self.startTripIfNeeded(viewState, source: source)
+            self.recordTrail(viewState.trainCoordinate)
+            viewState.trail = self.trail
+            viewState.routePath = self.routePath
+            self.publish(.connected(viewState))
         }
     }
 

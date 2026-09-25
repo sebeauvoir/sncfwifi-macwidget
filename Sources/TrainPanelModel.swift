@@ -117,6 +117,11 @@ struct TrainViewState {
     var speedKmh: Int = 0
     /// Position du train, pour la carte. Relue chaque seconde avec la vitesse.
     var trainCoordinate: CLLocationCoordinate2D?
+    /// Tracé réel de la ligne, quand le réseau le publie (chargé une fois par trajet).
+    var routePath: [CLLocationCoordinate2D] = []
+    /// Positions relevées depuis le lancement de l'app sur ce trajet : à défaut de tracé
+    /// publié, la portion parcourue suit au moins les voies réellement empruntées.
+    var trail: [CLLocationCoordinate2D] = []
 
     var wifiQuality: Int?      // 0…5
     var wifiDevices: Int?

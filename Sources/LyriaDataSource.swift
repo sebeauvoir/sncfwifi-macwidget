@@ -30,6 +30,10 @@ final class LyriaDataSource: TrainDataSource {
         client.fetchLive(completion: completion)
     }
 
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        client.fetchRoutePath(completion: completion)
+    }
+
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         client.fetchAll { [weak self] snapshot in
             guard let self, let snapshot else {

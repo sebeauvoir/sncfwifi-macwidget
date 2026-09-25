@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// Instantané consolidé du portail TGV Lyria (`wifi.tgv-lyria.com`).
@@ -86,6 +87,9 @@ final class LyriaAPIClient {
     private let gpsURL      = URL(string: "\(base)/api/train/gps/position/")!
     private let wifiURL     = URL(string: "\(base)/api/wifi/status/")!
     private let vehicleURL  = URL(string: "\(base)/api/transport/current/")!
+    private let pathURL     = URL(string: "\(base)/api/travel/path/")!
+    /// Le tracé pèse ~55 Ko : il mérite plus de marge que les appels d'état.
+    private let pathTimeout: TimeInterval = 15
 
     private let timeout: TimeInterval = 5
     /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
@@ -112,6 +116,14 @@ final class LyriaAPIClient {
             let coordinate = LiveFix.coordinate(latitude: APIValue.double(gps?["latitude"]),
                                                 longitude: APIValue.double(gps?["longitude"]))
             completion(LiveFix(speedKmh: Int((speed * 3.6).rounded()), coordinate: coordinate))
+        }
+    }
+
+    /// Tracé GeoJSON du parcours, chargé une fois par trajet pour la carte.
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        APIBody.fetch(url: pathURL, timeout: pathTimeout) { json in
+            let path = GeoJSONPath.coordinates(from: json)
+            completion(path.count > 1 ? path : nil)
         }
     }
 

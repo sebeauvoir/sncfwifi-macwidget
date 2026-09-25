@@ -134,6 +134,9 @@ private struct ConnectedView: View {
                 if showsMap {
                     TrainMapView(stops: state.stops,
                                  train: state.trainCoordinate,
+                                 arrivalId: state.selectedArrivalId,
+                                 routePath: state.routePath,
+                                 trail: state.trail,
                                  tint: NSColor(hex: state.provider.accentHex))
                         .frame(height: mapHeight)
                 }

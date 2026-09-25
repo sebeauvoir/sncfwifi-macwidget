@@ -87,6 +87,36 @@ struct LiveFix {
     }
 }
 
+/// Lecture tolérante d'un GeoJSON : `LineString`, `MultiLineString`, `Feature` ou
+/// `FeatureCollection`, mis bout à bout. Les positions GeoJSON sont en [longitude, latitude].
+enum GeoJSONPath {
+    static func coordinates(from json: Any?) -> [CLLocationCoordinate2D] {
+        guard let object = json as? [String: Any] else { return [] }
+        switch object["type"] as? String {
+        case "FeatureCollection":
+            return ((object["features"] as? [Any]) ?? []).flatMap { coordinates(from: $0) }
+        case "Feature":
+            return coordinates(from: object["geometry"])
+        case "LineString":
+            return points(object["coordinates"])
+        case "MultiLineString":
+            return ((object["coordinates"] as? [Any]) ?? []).flatMap(points)
+        default:
+            return []
+        }
+    }
+
+    private static func points(_ value: Any?) -> [CLLocationCoordinate2D] {
+        ((value as? [Any]) ?? []).compactMap { position in
+            guard let pair = position as? [Any], pair.count >= 2,
+                  let longitude = APIValue.double(pair[0]),
+                  let latitude = APIValue.double(pair[1])
+            else { return nil }
+            return LiveFix.coordinate(latitude: latitude, longitude: longitude)
+        }
+    }
+}
+
 /// Ce qu'une source rend au contrôleur.
 struct TrainSnapshot {
     var viewState: TrainViewState
@@ -110,10 +140,17 @@ protocol TrainDataSource: AnyObject {
     /// Carte du bar-restaurant, chargée à l'ouverture du panneau et non à chaque cycle.
     /// `nil` = indisponible. Un réseau sans carte n'a rien à implémenter.
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void)
+    /// Tracé réel de la ligne, chargé une fois par trajet. `nil` = non publié : la carte relie
+    /// alors les gares en ligne droite. Un réseau sans tracé n'a rien à implémenter.
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void)
 }
 
 extension TrainDataSource {
     func fetchMenu(completion: @escaping (OnboardMenu?) -> Void) {
+        completion(nil)
+    }
+
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
         completion(nil)
     }
 
