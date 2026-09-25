@@ -294,6 +294,19 @@ final class SNCFDataSource: TrainDataSource {
             .flatMap { saved in viewState.arrivalOptions.first { $0.id == saved || $0.label == saved }?.id }
             ?? viewState.arrivalOptions.last?.id
 
+        // Kilomètres restants jusqu'à la gare d'arrivée, tels que l'API les donne : chaque
+        // arrêt porte la progression du tronçon qui le relie au suivant
+        // (`progress.remainingDistance`, en mètres), on somme les tronçons jusqu'à l'arrivée.
+        // Pour la prochaine gare, c'est le chiffre de « Suivi du trajet » sur le portail.
+        if let arrivalIndex = journey?.selectedArrivalIndex, arrivalIndex > 0 {
+            let segments = allStops[..<arrivalIndex].compactMap { stop in
+                (stop["progress"] as? [String: Any]).flatMap { APIValue.double($0["remainingDistance"]) }
+            }
+            if segments.count == arrivalIndex {
+                viewState.remainingKm = segments.reduce(0, +) / 1000
+            }
+        }
+
 
         var payloads: [String: Any] = [:]
         if let gps { payloads["gps"] = gps }

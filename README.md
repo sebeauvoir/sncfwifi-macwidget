@@ -23,8 +23,10 @@ qui est disponible dans chaque train.
 **Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
 kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en petit sous les valeurs, jauge
 de progression du trajet en dessous quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
-kilomètres suivent le tracé des voies quand le réseau le publie (SNCF, Lyria), les distances de
-l'API chez ICE, sinon les gares en ligne droite. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` des tronçons jusqu'à
+l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
+seconde de la distance parcourue d'après le GPS entre deux lectures ; à défaut, le long du tracé
+publié (Lyria) ou de gare en gare. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
 données est rafraîchi toutes les 30 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
