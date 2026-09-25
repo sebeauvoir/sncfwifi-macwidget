@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 
 /// Appelle les endpoints de l'API WiFi SNCF en parallèle.
@@ -9,6 +10,8 @@ final class TrainAPIClient {
     private let barURL        = URL(string: "https://wifi.sncf/router/api/bar/attendance")!
     private let statsURL      = URL(string: "https://wifi.sncf/router/api/connection/statistics")!
     private let statusURL     = URL(string: "https://wifi.sncf/router/api/connection/status")!
+    /// Tracé des voies du trajet, en GeoJSON `LineString` (origine → terminus), ~40 Ko.
+    private let graphURL      = URL(string: "https://wifi.sncf/router/api/train/graph")!
     
     private let timeout: TimeInterval = 5
     /// Relue chaque seconde : une réponse plus lente ne sert plus à rien.
@@ -43,6 +46,21 @@ final class TrainAPIClient {
                 longitude: APIValue.double(gps?["longitude"]) ?? APIValue.double(gps?["lon"]) ?? APIValue.double(gps?["lng"])
             )
             completion(LiveFix(speedKmh: Int(speed * 3.6), coordinate: coordinate))
+        }
+    }
+
+    /// Tracé des voies, chargé une fois par trajet pour la carte.
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        let url = MockTrainData.shared.isEnabled
+            ? MockTrainData.shared.url(path: "/router/api/train/graph")
+            : graphURL
+        guard let url else {
+            completion(nil)
+            return
+        }
+        APIBody.fetch(url: url, timeout: 15) { json in
+            let path = GeoJSONPath.coordinates(from: json)
+            completion(path.count > 1 ? path : nil)
         }
     }
 

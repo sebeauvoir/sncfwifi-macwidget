@@ -31,7 +31,7 @@ horaires théoriques barrés en cas de retard ; une carte du trajet, à la mani�
 `wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
 relue chaque seconde, cadrage qui suit le train jusqu'à la gare d'arrivée choisie (un zoom ou un
 déplacement à la main suspend le suivi une minute). Le tracé suit les voies quand le réseau le
-publie (Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
+publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
@@ -79,6 +79,7 @@ SSID reconnus : `_SNCF_WIFI_INOUI`, `OUIFI`, `SNCF_WIFI_INTERCITES`, `WIFI_SNCF`
 | `GET /router/api/connection/statistics` | qualité WiFi (0…5), appareils connectés |
 | `GET /router/api/connection/status` | données consommées / restantes, prochaine remise à zéro |
 | `GET /router/api/bar/attendance` | affluence au bar — lue et présente dans le JSON de debug, pas encore affichée |
+| `GET /router/api/train/graph` | tracé des voies du trajet, GeoJSON `LineString` d'origine en terminus (~40 Ko), chargé **une fois par trajet** pour la carte |
 
 ### 🇪🇺 WiFi Eurostar — transmanche et continental (ex-Thalys)
 

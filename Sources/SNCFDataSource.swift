@@ -26,6 +26,10 @@ final class SNCFDataSource: TrainDataSource {
         client.fetchLive(completion: completion)
     }
 
+    func fetchRoutePath(completion: @escaping ([CLLocationCoordinate2D]?) -> Void) {
+        client.fetchRoutePath(completion: completion)
+    }
+
     func fetch(completion: @escaping (TrainSnapshot?) -> Void) {
         client.fetchAll { [weak self] gps, details, bar, stats, status in
             guard let self, gps != nil || details != nil else {
