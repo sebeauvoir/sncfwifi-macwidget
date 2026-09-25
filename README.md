@@ -18,7 +18,8 @@ qui est disponible dans chaque train.
 ## Le widget 🖥️
 
 **Pastille** — la vitesse du train, en permanence et sur tous les réseaux (`278 km/h`,
-`0 km/h` à l'arrêt). Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+`0 km/h` à l'arrêt), avec la jauge de progression du trajet en dessous quand le réseau
+expose une desserte (SNCF, ICE, Lyria). Elle est relue chaque seconde via un seul endpoint léger ; le reste des
 données est rafraîchi toutes les 30 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 

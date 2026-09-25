@@ -23,6 +23,8 @@ final class MenuBarController: NSObject {
 
     /// Vitesse affichée dans la pastille. `nil` = pas de train (icône « réseau inconnu »).
     private var speedKmh: Int?
+    /// Progression du trajet, dessinée sous la vitesse. `nil` = réseau sans desserte, pas de jauge.
+    private var progress: Double?
 
     /// Incrémenté à chaque `refresh()`. Une réponse d'API ou de sonde portant un jeton périmé
     /// est ignorée, sinon une requête lente pourrait ressusciter le train précédent.
@@ -170,10 +172,11 @@ final class MenuBarController: NSObject {
 
     // MARK: - Pastille
 
-    /// La pastille n'affiche que la vitesse du train, quel que soit le réseau.
+    /// La pastille affiche la vitesse du train, avec la jauge de progression du trajet en
+    /// dessous quand le réseau expose une desserte.
     private func redrawTitle() {
         guard let speedKmh else { return }
-        applyTitleImage(text: "\(speedKmh) km/h", progress: nil)
+        applyTitleImage(text: "\(speedKmh) km/h", progress: progress)
     }
 
     /// Entre deux cycles complets, ne relit que la vitesse : un seul petit appel par seconde.
@@ -344,6 +347,7 @@ final class MenuBarController: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.speedKmh = nil
+            self.progress = nil
             self.store.route = .main
             self.store.menu = .idle
             self.statusItem.button?.image = NSImage(systemSymbolName: "wifi.slash", accessibilityDescription: nil)
@@ -379,6 +383,7 @@ final class MenuBarController: NSObject {
             self.notifyPlatformChangeIfNeeded(snapshot: snapshot)
 
             self.speedKmh = snapshot.viewState.speedKmh
+            self.progress = snapshot.badge.progress
             self.redrawTitle()
             self.publish(.connected(snapshot.viewState))
         }
