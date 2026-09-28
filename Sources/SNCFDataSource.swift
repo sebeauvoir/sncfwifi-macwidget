@@ -406,9 +406,17 @@ final class SNCFDataSource: TrainDataSource {
                                      label: "Bar", value: empty ? "Pas d'attente" : "File d'attente",
                                      note: "Oui / non seulement, sans durée"))
         }
-        if let co2 = co2Percent() {
-            tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
-                                     label: "CO₂ vs voiture", value: "−\(co2) %"))
+        // La table du portail ne couvre que des trajets intérieurs (119 couples de gares
+        // françaises relevés à bord) : un train vers l'étranger n'y figure pas.
+        if client.co2Table != nil {
+            if let co2 = co2Percent() {
+                tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
+                                         label: "CO₂ vs voiture", value: "−\(co2) %"))
+            } else {
+                tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
+                                         label: "CO₂ vs voiture", value: "Non publié pour ce trajet",
+                                         note: "Le portail ne couvre que des trajets intérieurs"))
+            }
         }
         if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
             tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
