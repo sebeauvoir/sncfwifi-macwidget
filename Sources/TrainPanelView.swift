@@ -350,11 +350,8 @@ struct MapPreviewView: View {
                state.trainCoordinate != nil || state.stops.contains(where: { $0.coordinate != nil }) {
                 ZStack(alignment: .topLeading) {
                     TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
-                    // Sous les boutons de fenêtre, que la barre de titre transparente laisse
-                    // par-dessus la carte.
                     PreviewReadouts(state: state)
-                        .padding(.leading, 12)
-                        .padding(.top, 38)
+                        .padding(12)
                 }
             } else {
                 Text("Carte indisponible")
@@ -366,8 +363,9 @@ struct MapPreviewView: View {
     }
 }
 
-/// Bandeau de l'aperçu : vitesse, kilomètres restants, durée jusqu'à ma gare d'arrivée, et
-/// prochaine gare avec la durée pour l'atteindre. Les durées sont recalculées chaque seconde.
+/// Carte d'infos de l'aperçu, en surbrillance en haut à gauche, une info par ligne : vitesse,
+/// kilomètres restants, durée jusqu'à ma gare d'arrivée, prochaine gare et durée pour
+/// l'atteindre, altitude. Les durées sont recalculées chaque seconde.
 private struct PreviewReadouts: View {
     let state: TrainViewState
     @State private var now = Date()
@@ -383,7 +381,7 @@ private struct PreviewReadouts: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 18) {
+        VStack(alignment: .leading, spacing: 9) {
             readout(value: "\(state.speedKmh)", unit: "km/h", label: "Vitesse")
             if let km = state.remainingKm {
                 readout(value: DistanceFormat.km(km), unit: "km", label: "Restants")
@@ -397,11 +395,14 @@ private struct PreviewReadouts: View {
                         unit: nil,
                         label: "Prochaine gare · \(next.label)")
             }
+            if let altitude = state.altitudeM {
+                readout(value: "\(Int(altitude.rounded()))", unit: "m", label: "Altitude")
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.windowBackgroundColor).opacity(0.9)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.windowBackgroundColor).opacity(0.92)))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
         .shadow(color: Color.black.opacity(0.2), radius: 6, y: 2)
         .onReceive(clock) { now = $0 }
     }
