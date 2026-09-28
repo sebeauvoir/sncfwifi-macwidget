@@ -45,6 +45,7 @@ final class EurostarDataSource: TrainDataSource {
             speedKmh: snap.speedKmh
         )
         state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
+        state.altitudeM = snap.altitudeM
 
         if let used = snap.dataUsedMB, let limit = snap.dataLimitMB, limit > 0 {
             state.dataConsumedMB = used

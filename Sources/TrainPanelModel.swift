@@ -134,6 +134,8 @@ struct TrainViewState {
     var speedKmh: Int = 0
     /// Position du train, pour la carte. Relue chaque seconde avec la vitesse.
     var trainCoordinate: CLLocationCoordinate2D?
+    /// Altitude du train en mètres, quand le GPS la donne (SNCF, Lyria, Eurostar).
+    var altitudeM: Double?
     /// Tracé réel de la ligne, quand le réseau le publie (chargé une fois par trajet).
     var routePath: [CLLocationCoordinate2D] = []
     /// Kilomètres restants jusqu'à la gare d'arrivée choisie. Posés par la source quand l'API

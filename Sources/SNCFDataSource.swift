@@ -279,6 +279,7 @@ final class SNCFDataSource: TrainDataSource {
             )
         }
         viewState.trainCoordinate = LiveFix.coordinate(latitude: currentLat, longitude: currentLon)
+        viewState.altitudeM = APIValue.double(gps?["altitude"])
 
         // Qualité WiFi
         if let stats = stats {

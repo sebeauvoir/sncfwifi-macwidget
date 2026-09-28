@@ -95,6 +95,7 @@ final class LyriaDataSource: TrainDataSource {
         state.selectedArrivalId = arrivalStop?.id
         state.metrics = metrics(for: snap)
         state.trainCoordinate = LiveFix.coordinate(latitude: snap.latitude, longitude: snap.longitude)
+        state.altitudeM = snap.altitudeM
 
         let badge = StatusBadge(
             text: LyriaDataSource.shortStationName(destination),
