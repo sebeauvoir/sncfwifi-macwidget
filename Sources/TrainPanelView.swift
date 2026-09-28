@@ -167,7 +167,7 @@ private struct ConnectedView: View {
                 if !state.extraMetrics.isEmpty {
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("En vrac")
+                        Text("En détail")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(.secondary)
                         ExtraMetricsView(tiles: state.extraMetrics, tint: state.provider.accent)
@@ -345,7 +345,7 @@ private struct MetricsView: View {
     }
 }
 
-// MARK: - En vrac
+// MARK: - En détail
 
 /// Tuiles façon tableau de bord : deux colonnes, libellé discret au-dessus, valeur en gras sur
 /// une ligne. Les tuiles larges (durées d'arrêt) prennent toute la largeur en dessous.

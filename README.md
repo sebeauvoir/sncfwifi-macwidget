@@ -39,9 +39,11 @@ relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : *
 du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
 main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
 et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. En bas du panneau, une section
-**En vrac** (WiFi SNCF) rassemble le reste de ce que l'API expose : altitude, cap, distance
-parcourue, vitesse moyenne, temps restant, débit accordé, attente au bar, numéro de rame. Le tracé suit les voies quand le réseau le
-publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
+**En détail** (WiFi SNCF) rassemble le reste de ce que l'API expose : altitude, cap, distance
+parcourue, vitesse moyenne, temps restant, débit accordé, attente au bar (oui / non), numéro de
+rame. Le tracé suit les voies quand le réseau le publie (SNCF, Lyria) ; sur le WiFi SNCF, les
+portions sur LGV sont colorées en ambre, d'après la vitesse maximale des voies (plus de 220 km/h)
+que portent les tuiles du train, au fur et à mesure qu'elles se chargent ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
 autres réseaux n'embarquant pas de tuiles, leur carte utilise le fond Apple, chargé depuis

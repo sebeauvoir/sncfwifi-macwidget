@@ -38,12 +38,26 @@
   }
   .badge svg { width: 58%; height: 58%; fill: #fff; }
   .badge:empty { border-width: 1.5px; }
+  /* Légende des LGV, au-dessus de l'échelle : n'apparaît qu'une fois une LGV repérée. */
+  #lgv-legend {
+    position: absolute; left: 6px; bottom: 22px; z-index: 2; display: none;
+    font: 500 8px -apple-system, BlinkMacSystemFont, sans-serif; color: #3a3a3c;
+    background: rgba(255, 255, 255, .72); border-radius: 3px; padding: 1px 4px; line-height: 11px;
+  }
+  #lgv-legend i {
+    display: inline-block; width: 12px; height: 3px; border-radius: 2px;
+    background: #F2A900; vertical-align: middle; margin-right: 3px;
+  }
+  @media (prefers-color-scheme: dark) {
+    #lgv-legend { color: #e5e5ea; background: rgba(28, 28, 30, .72); }
+  }
 </style>
 <script>/*MAPLIBRE_JS*/</script>
 <script>/*PMTILES_JS*/</script>
 </head>
 <body>
 <div id="map"></div>
+<div id="lgv-legend"><i></i>LGV</div>
 <script>
 "use strict";
 
@@ -149,6 +163,23 @@ async function start() {
         paint: { "line-color": tint, "line-width": 4, "line-opacity": id === "travelled" ? 1 : 0.4 },
       });
     }
+    // Portions sur LGV, par-dessus chacun des deux tracés.
+    map.addSource("lgv-remaining", { type: "geojson", data: multiline([]) });
+    map.addLayer({
+      id: "lgv-remaining", type: "line", source: "lgv-remaining",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": LGV_COLOR, "line-width": 4, "line-opacity": 0.5 },
+    }, "travelled");
+    map.addSource("lgv-travelled", { type: "geojson", data: multiline([]) });
+    map.addLayer({
+      id: "lgv-travelled", type: "line", source: "lgv-travelled",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": LGV_COLOR, "line-width": 4 },
+    });
+    // Chaque tuile des voies ferrées chargée peut révéler de nouvelles LGV.
+    map.on("sourcedata", (event) => {
+      if (event.sourceId === "railways" && event.tile) scheduleLgvScan();
+    });
     loaded = true;
     if (pending) update(pending);
     pending = null;
@@ -158,6 +189,116 @@ async function start() {
 
 function line(coordinates) {
   return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } };
+}
+
+function multiline(runs) {
+  return { type: "Feature", properties: {}, geometry: { type: "MultiLineString", coordinates: runs } };
+}
+
+// ——— LGV ———
+// La couche « speeds » des tuiles du train porte la vitesse maximale de chaque voie
+// (OpenStreetMap) ; le style du portail appelle LGV toute voie à plus de 220 km/h. Seules les
+// tuiles déjà chargées sont connues : le repérage se complète à mesure que la carte se déplace.
+const LGV_FILTER = [">", ["to-number", ["get", "maxspeed"]], 220];
+const LGV_COLOR = "#F2A900";
+// Grille d'index (~2 km) et tolérance entre notre tracé et la voie d'OpenStreetMap.
+const LGV_CELL = 0.02;
+const LGV_TOLERANCE_M = 150;
+const lgvGrid = new Map();
+const lgvSeen = new Set();
+const lgvPoints = new Set();
+let lgvTimer = null;
+
+function scheduleLgvScan() {
+  clearTimeout(lgvTimer);
+  lgvTimer = setTimeout(scanLgv, 400);
+}
+
+function scanLgv() {
+  if (!map.getSource("railways")) return;
+  let features;
+  try {
+    features = map.querySourceFeatures("railways", { sourceLayer: "speeds", filter: LGV_FILTER });
+  } catch (e) { return; }
+  let added = 0;
+  for (const feature of features) {
+    const geometry = feature.geometry;
+    const parts = geometry.type === "LineString" ? [geometry.coordinates]
+      : geometry.type === "MultiLineString" ? geometry.coordinates : [];
+    for (const part of parts) {
+      for (let i = 0; i < part.length - 1; i++) {
+        const a = part[i], b = part[i + 1];
+        const key = `${a[0].toFixed(5)},${a[1].toFixed(5)}|${b[0].toFixed(5)},${b[1].toFixed(5)}`;
+        if (lgvSeen.has(key)) continue;
+        lgvSeen.add(key);
+        added++;
+        const x0 = Math.floor(Math.min(a[0], b[0]) / LGV_CELL), x1 = Math.floor(Math.max(a[0], b[0]) / LGV_CELL);
+        const y0 = Math.floor(Math.min(a[1], b[1]) / LGV_CELL), y1 = Math.floor(Math.max(a[1], b[1]) / LGV_CELL);
+        if (x1 - x0 > 50 || y1 - y0 > 50) continue;
+        for (let x = x0; x <= x1; x++) {
+          for (let y = y0; y <= y1; y++) {
+            const cell = `${x},${y}`;
+            if (!lgvGrid.has(cell)) lgvGrid.set(cell, []);
+            lgvGrid.get(cell).push([a, b]);
+          }
+        }
+      }
+    }
+  }
+  if (added) drawLgv();
+}
+
+// Distance d'un point à un segment, en mètres (plan local : suffisant à cette échelle).
+function distanceToSegment(p, a, b) {
+  const kx = 111320 * Math.cos(p[1] * Math.PI / 180), ky = 110540;
+  const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * ky;
+  const bx = (b[0] - p[0]) * kx, by = (b[1] - p[1]) * ky;
+  const dx = bx - ax, dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)) : 0;
+  return Math.hypot(ax + t * dx, ay + t * dy);
+}
+
+function isLgv(point) {
+  const key = `${point[0]},${point[1]}`;
+  if (lgvPoints.has(key)) return true;
+  const cx = Math.floor(point[0] / LGV_CELL), cy = Math.floor(point[1] / LGV_CELL);
+  for (let x = cx - 1; x <= cx + 1; x++) {
+    for (let y = cy - 1; y <= cy + 1; y++) {
+      for (const [a, b] of lgvGrid.get(`${x},${y}`) || []) {
+        if (distanceToSegment(point, a, b) < LGV_TOLERANCE_M) {
+          lgvPoints.add(key);
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Suites de points consécutifs sur LGV.
+function lgvRuns(coordinates) {
+  const runs = [];
+  let current = null;
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    if (isLgv(coordinates[i]) && isLgv(coordinates[i + 1])) {
+      if (!current) { current = [coordinates[i]]; runs.push(current); }
+      current.push(coordinates[i + 1]);
+    } else {
+      current = null;
+    }
+  }
+  return runs;
+}
+
+function drawLgv() {
+  if (!loaded || lgvGrid.size === 0) return;
+  const travelled = lgvRuns(travelledBase);
+  const remaining = lgvRuns(remainingBase);
+  map.getSource("lgv-travelled").setData(multiline(travelled));
+  map.getSource("lgv-remaining").setData(multiline(remaining));
+  document.getElementById("lgv-legend").style.display =
+    travelled.length || remaining.length ? "block" : "none";
 }
 
 function badge(svg, size, color, title) {
@@ -188,6 +329,7 @@ window.update = function (payload) {
   const head = train ? [train] : [];
   map.getSource("travelled").setData(line(travelledBase.concat(head)));
   map.getSource("remaining").setData(line(head.concat(remainingBase)));
+  if (payload.travelled || payload.remaining) drawLgv();
 
   if (payload.stopsKey !== undefined && payload.stopsKey !== stopsKey) {
     stopsKey = payload.stopsKey;

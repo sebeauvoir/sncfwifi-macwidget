@@ -403,8 +403,7 @@ final class SNCFDataSource: TrainDataSource {
         if let empty = bar?["isBarQueueEmpty"] as? Bool {
             // L'API ne dit que « file vide ou non » : ni sa longueur ni l'attente.
             tiles.append(ExtraMetric(id: "bar", symbol: "cup.and.saucer.fill",
-                                     label: "Bar", value: empty ? "Pas d'attente" : "File d'attente",
-                                     note: "Oui / non seulement, sans durée"))
+                                     label: "Attente au bar", value: empty ? "Non" : "Oui"))
         }
         if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
             tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
