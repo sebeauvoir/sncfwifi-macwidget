@@ -31,7 +31,10 @@ Pour chaque modification :
 2. **Toujours demander à l'utilisateur avant de lancer un build**, même de test : il a souvent
    de nouvelles idées entre-temps. Une fois d'accord, lancer le workflow `build.yml` sur la
    branche (`workflow_dispatch`) et donner le lien direct de l'artefact
-   (`actions/runs/<run>/artifacts/<id>`).
+   (`actions/runs/<run>/artifacts/<id>`). Pour connaître la fin du build, s'abonner aux
+   événements de la pull request de la branche (`subscribe_pr_activity`) : GitHub prévient
+   quand les vérifications du dernier commit se terminent. Pas de minuterie d'attente ; au
+   besoin, un seul rappel de secours.
 3. Ouvrir une pull request vers `main`.
 4. Fusionner la pull request seulement quand l'utilisateur le demande, en méthode `rebase`
    (historique linéaire, changelog propre). GitHub supprime alors la branche tout seul
