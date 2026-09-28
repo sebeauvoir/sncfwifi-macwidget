@@ -348,7 +348,14 @@ struct MapPreviewView: View {
         Group {
             if case let .connected(state) = store.state,
                state.trainCoordinate != nil || state.stops.contains(where: { $0.coordinate != nil }) {
-                TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
+                ZStack(alignment: .topLeading) {
+                    TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
+                    // Sous les boutons de fenêtre, que la barre de titre transparente laisse
+                    // par-dessus la carte.
+                    PreviewReadouts(state: state)
+                        .padding(.leading, 12)
+                        .padding(.top, 38)
+                }
             } else {
                 Text("Carte indisponible")
                     .foregroundColor(.secondary)
@@ -356,6 +363,76 @@ struct MapPreviewView: View {
             }
         }
         .frame(minWidth: 420, minHeight: 300)
+    }
+}
+
+/// Bandeau de l'aperçu : vitesse, kilomètres restants, durée jusqu'à ma gare d'arrivée, et
+/// prochaine gare avec la durée pour l'atteindre. Les durées sont recalculées chaque seconde.
+private struct PreviewReadouts: View {
+    let state: TrainViewState
+    @State private var now = Date()
+    private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var arrival: StopRow? {
+        state.stops.first { $0.id == state.selectedArrivalId }
+    }
+
+    /// Prochaine gare : celle que la desserte marque « en cours » (à quai, ou la suivante).
+    private var nextStop: StopRow? {
+        state.stops.first { $0.status == .current }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 18) {
+            readout(value: "\(state.speedKmh)", unit: "km/h", label: "Vitesse")
+            if let km = state.remainingKm {
+                readout(value: DistanceFormat.km(km), unit: "km", label: "Restants")
+            }
+            if let arrival, let date = arrival.arrivalDate, date > now {
+                readout(value: Self.duration(date.timeIntervalSince(now)), unit: nil,
+                        label: "Jusqu'à \(arrival.label)")
+            }
+            if let next = nextStop, next.id != arrival?.id {
+                readout(value: next.arrivalDate.map { $0 > now ? Self.duration($0.timeIntervalSince(now)) : "À quai" } ?? "—",
+                        unit: nil,
+                        label: "Prochaine gare · \(next.label)")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.windowBackgroundColor).opacity(0.9)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: Color.black.opacity(0.2), radius: 6, y: 2)
+        .onReceive(clock) { now = $0 }
+    }
+
+    private func readout(value: String, unit: String?, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
+                    .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .semibold)))
+                if let unit {
+                    Text(unit)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 180, alignment: .leading)
+        }
+    }
+
+    /// « 1h02 », « 47 min ».
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        guard minutes >= 60 else { return "\(max(1, minutes)) min" }
+        let rest = minutes % 60
+        return "\(minutes / 60)h" + String(format: "%02d", rest)
     }
 }
 

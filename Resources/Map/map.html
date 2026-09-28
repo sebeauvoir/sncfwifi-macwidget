@@ -38,6 +38,11 @@
   }
   .badge svg { width: 58%; height: 58%; fill: #fff; }
   .badge:empty { border-width: 1.5px; }
+  /* Flèche par défaut ; la main fermée seulement pendant qu'on fait glisser la carte, et
+     jamais en mode suivi, où la carte ne se déplace pas. */
+  .maplibregl-canvas-container.maplibregl-interactive { cursor: default; }
+  .maplibregl-canvas-container.maplibregl-interactive:active { cursor: grabbing; }
+  body.follow .maplibregl-canvas-container.maplibregl-interactive:active { cursor: default; }
   /* Légende des LGV, au-dessus de l'échelle : n'apparaît qu'une fois une LGV repérée. */
   #lgv-legend {
     position: absolute; left: 6px; bottom: 22px; z-index: 2; display: none;
@@ -127,6 +132,9 @@ async function start() {
     pitchWithRotate: false,
     touchPitch: false,
     fadeDuration: 0,
+    // Suivi : chaque mouvement de caméra, zoom compris, garde le train affiché au centre.
+    transformCameraUpdate: () =>
+      (mode === "follow" && followPlaced && shown ? { center: maplibregl.LngLat.convert(shown) } : {}),
   });
   map.touchZoomRotate.disableRotation();
   map.keyboard.disableRotation();
@@ -149,8 +157,6 @@ async function start() {
     if (mode !== "follow") return;
     followZoom = map.getZoom();
     try { localStorage.setItem("followZoom", String(followZoom)); } catch (e) {}
-    // Un zoom pendant le glissement l'interrompt à mi-course : on remet le train au centre.
-    if (train) map.jumpTo({ center: train });
   });
   map.on("error", (event) => post({ type: "error", message: String(event.error && event.error.message) }));
 
@@ -560,12 +566,12 @@ window.update = function (payload) {
       const element = badge(TRAIN, 30, tint);
       element.style.zIndex = "2";
       trainMarker = new maplibregl.Marker({ element }).setLngLat(train).addTo(map);
-    } else {
-      trainMarker.setLngLat(train);
     }
+    glideTo(train);
   } else if (trainMarker) {
     trainMarker.remove();
     trainMarker = null;
+    shown = null;
   }
 
   if (payload.mode) applyMode(payload.mode);
@@ -580,6 +586,7 @@ window.update = function (payload) {
 function applyMode(next) {
   if (next === mode) return;
   mode = next;
+  document.body.classList.toggle("follow", mode === "follow");
   if (mode === "follow") {
     map.dragPan.disable();
     map.boxZoom.disable();
@@ -606,16 +613,45 @@ function applyMode(next) {
 // Garde le train au centre. Glissement linéaire d'une seconde, au rythme des positions :
 // la carte défile en continu sous le train.
 function center() {
-  if (!train) return;
-  if (!followPlaced) {
-    followPlaced = true;
-    map.jumpTo({ center: train, zoom: followZoom });
+  if (!shown || followPlaced) return;
+  followPlaced = true;
+  map.jumpTo({ center: shown, zoom: followZoom });
+}
+
+// — Glissement du train —
+// Entre deux positions (une par seconde), le train glisse image par image. En suivi, la
+// caméra le suit à chaque image : plus d'animation qu'un coup de molette interromprait.
+let shown = null;
+let glideFrom = null;
+let glideTarget = null;
+let glideStart = 0;
+let glideFrame = 0;
+
+function glideTo(next) {
+  const far = shown && Math.abs(next[0] - shown[0]) + Math.abs(next[1] - shown[1]) > 0.05;
+  if (!shown || far) {
+    // Premier point, ou saut de plusieurs kilomètres : pas de glissement.
+    shown = next;
+    showTrain();
     return;
   }
-  const here = map.project(map.getCenter());
-  const there = map.project(train);
-  if (Math.hypot(here.x - there.x, here.y - there.y) < 0.5) return;
-  map.easeTo({ center: train, duration: 1000, easing: (t) => t });
+  glideFrom = shown;
+  glideTarget = next;
+  glideStart = performance.now();
+  if (!glideFrame) glideFrame = requestAnimationFrame(glide);
+}
+
+function glide(now) {
+  const t = Math.min(1, (now - glideStart) / 1000);
+  shown = [glideFrom[0] + (glideTarget[0] - glideFrom[0]) * t,
+           glideFrom[1] + (glideTarget[1] - glideFrom[1]) * t];
+  showTrain();
+  glideFrame = t < 1 ? requestAnimationFrame(glide) : 0;
+}
+
+function showTrain() {
+  if (trainMarker) trainMarker.setLngLat(shown);
+  if (mode === "follow" && followPlaced) map.jumpTo({ center: shown });
 }
 
 // Cadre train → gare d'arrivée, sauf pendant la pause qui suit un geste. Un écart de moins de

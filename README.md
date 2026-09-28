@@ -45,7 +45,9 @@ rame. Le tracé suit les voies quand le réseau le publie (SNCF, Lyria) ; sur le
 portions sur LGV sont colorées en ambre, d'après la vitesse maximale des voies (plus de 220 km/h)
 que portent les tuiles du train : celles de zoom 8 le long de tout le trajet sont lues directement
 dans l'archive, quel que soit l'affichage. Un bouton agrandit la carte dans une fenêtre d'aperçu
-flottante, redimensionnable, fermée par Échap ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
+flottante, redimensionnable, fermée par Échap, avec vitesse, kilomètres restants, durée jusqu'à la
+gare d'arrivée et prochaine gare. En mode suivi, le train reste au centre à chaque image, zoom
+compris ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
 autres réseaux n'embarquant pas de tuiles, leur carte utilise le fond Apple, chargé depuis
