@@ -48,12 +48,11 @@ struct TrainMapView: View {
         }
     }
 
-    /// Le pictogramme montre le mode en cours ; l'infobulle dit ce que fait le clic.
+    /// Le pictogramme montre le mode où mène le clic, pas celui en cours.
     private var modeButton: some View {
-        roundButton(symbol: follow ? "location.fill" : "point.topleft.down.curvedto.point.bottomright.up",
-                    tinted: follow) { follow.toggle() }
-            .help(follow ? "Suivi du train — cliquer pour voir le trajet jusqu'à la gare d'arrivée"
-                         : "Trajet jusqu'à la gare d'arrivée — cliquer pour suivre le train")
+        roundButton(symbol: follow ? "point.topleft.down.curvedto.point.bottomright.up" : "location.fill",
+                    tinted: false) { follow.toggle() }
+            .help(follow ? "Voir le trajet jusqu'à la gare d'arrivée" : "Suivre le train")
     }
 
     private func roundButton(symbol: String, tinted: Bool, action: @escaping () -> Void) -> some View {
