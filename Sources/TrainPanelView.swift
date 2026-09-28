@@ -381,50 +381,57 @@ private struct PreviewReadouts: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            readout(value: "\(state.speedKmh)", unit: "km/h", label: "Vitesse")
+        VStack(alignment: .leading, spacing: 7) {
+            row(symbol: "speedometer", label: "Vitesse", value: "\(state.speedKmh)", unit: "km/h")
             if let km = state.remainingKm {
-                readout(value: DistanceFormat.km(km), unit: "km", label: "Restants")
+                row(symbol: "mappin.and.ellipse", label: "Restants", value: DistanceFormat.km(km), unit: "km")
             }
             if let arrival, let date = arrival.arrivalDate, date > now {
-                readout(value: Self.duration(date.timeIntervalSince(now)), unit: nil,
-                        label: "Jusqu'à \(arrival.label)")
+                row(symbol: "flag", label: "Arrivée à \(arrival.label)",
+                    value: Self.duration(date.timeIntervalSince(now)))
             }
             if let next = nextStop, next.id != arrival?.id {
-                readout(value: next.arrivalDate.map { $0 > now ? Self.duration($0.timeIntervalSince(now)) : "À quai" } ?? "—",
-                        unit: nil,
-                        label: "Prochaine gare · \(next.label)")
+                row(symbol: "clock", label: "Prochaine gare · \(next.label)",
+                    value: next.arrivalDate.map { $0 > now ? Self.duration($0.timeIntervalSince(now)) : "À quai" } ?? "—")
             }
             if let altitude = state.altitudeM {
-                readout(value: "\(Int(altitude.rounded()))", unit: "m", label: "Altitude")
+                row(symbol: "mountain.2", label: "Altitude", value: "\(Int(altitude.rounded()))", unit: "m")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        // Largeur de la ligne la plus longue : les valeurs s'alignent à droite.
+        .fixedSize()
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.windowBackgroundColor).opacity(0.92)))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
         .shadow(color: Color.black.opacity(0.2), radius: 6, y: 2)
         .onReceive(clock) { now = $0 }
     }
 
-    private func readout(value: String, unit: String?, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
+    /// Une info par ligne : pictogramme et libellé à gauche, valeur alignée à droite.
+    private func row(symbol: String, label: String, value: String, unit: String? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(state.provider.accent)
+                .frame(width: 16)
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 190, alignment: .leading)
+            Spacer(minLength: 14)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
                 Text(value)
                     // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
-                    .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .semibold)))
+                    .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)))
                 if let unit {
                     Text(unit)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                 }
             }
-            Text(label)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 180, alignment: .leading)
         }
     }
 
