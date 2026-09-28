@@ -235,6 +235,8 @@ final class TrainStore: ObservableObject {
     var onQuit: () -> Void = {}
     var onSelectArrival: (String) -> Void = { _ in }
     var onSelectDeparture: (String) -> Void = { _ in }
+    /// Ouvre la carte en grand, dans une fenêtre d'aperçu.
+    var onOpenMapPreview: () -> Void = {}
     var onToggleDemo: () -> Void = {}
     /// Change le réseau simulé en mode démo (le serveur local sert les deux plateformes),
     /// désigné par l'identifiant de son descripteur.

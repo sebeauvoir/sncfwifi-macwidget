@@ -15,6 +15,10 @@ struct TrainMapView: View {
     let input: TrainMapInput
     /// Origine du serveur de tuiles embarqué (`https://wifi.sncf/`), `nil` s'il n'y en a pas.
     let localTiles: URL?
+    /// Coins arrondis : dans le panneau, pas dans la fenêtre d'aperçu.
+    var cornerRadius: CGFloat = 8
+    /// Ouvre l'aperçu agrandi ; `nil` dans l'aperçu lui-même (pas de bouton).
+    var onExpand: (() -> Void)? = nil
 
     /// Mode suivi : train au centre, carte fixe, zoom seul. Sinon, cadrage train → gare
     /// d'arrivée. Mémorisé d'une ouverture à l'autre.
@@ -23,8 +27,14 @@ struct TrainMapView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             map
-            modeButton
-                .padding(6)
+            VStack(spacing: 6) {
+                modeButton
+                if let onExpand {
+                    roundButton(symbol: "arrow.up.left.and.arrow.down.right", tinted: false, action: onExpand)
+                        .help("Agrandir la carte")
+                }
+            }
+            .padding(6)
         }
     }
 
@@ -32,28 +42,49 @@ struct TrainMapView: View {
     private var map: some View {
         let input = self.input.with(follow: follow)
         if let localTiles, LocalTileMapView.html != nil {
-            LocalTileMapView(input: input, origin: localTiles)
+            LocalTileMapView(input: input, origin: localTiles, cornerRadius: cornerRadius)
         } else {
-            AppleMapView(input: input)
+            AppleMapView(input: input, cornerRadius: cornerRadius)
         }
     }
 
     /// Le pictogramme montre le mode en cours ; l'infobulle dit ce que fait le clic.
     private var modeButton: some View {
-        Button {
-            follow.toggle()
-        } label: {
-            Image(systemName: follow ? "location.fill" : "arrow.up.left.and.arrow.down.right")
+        roundButton(symbol: follow ? "location.fill" : "point.topleft.down.curvedto.point.bottomright.up",
+                    tinted: follow) { follow.toggle() }
+            .help(follow ? "Suivi du train — cliquer pour voir le trajet jusqu'à la gare d'arrivée"
+                         : "Trajet jusqu'à la gare d'arrivée — cliquer pour suivre le train")
+    }
+
+    private func roundButton(symbol: String, tinted: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(follow ? Color(NSColor(hex: input.tintHex)) : .primary)
+                .foregroundColor(tinted ? Color(NSColor(hex: input.tintHex)) : .primary)
                 .frame(width: 24, height: 24)
                 .background(Circle().fill(Color(NSColor.windowBackgroundColor).opacity(0.92)))
                 .overlay(Circle().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
                 .shadow(color: Color.black.opacity(0.18), radius: 2, y: 1)
         }
         .buttonStyle(PlainButtonStyle())
-        .help(follow ? "Suivi du train — cliquer pour voir le trajet jusqu'à la gare d'arrivée"
-                     : "Trajet jusqu'à la gare d'arrivée — cliquer pour suivre le train")
+    }
+}
+
+extension TrainViewState {
+    /// Ce que la carte affiche pour cet état, dans le panneau comme dans l'aperçu.
+    var mapInput: TrainMapInput {
+        TrainMapInput(stops: stops,
+                      train: trainCoordinate,
+                      arrivalId: selectedArrivalId,
+                      routePath: routePath,
+                      trail: trail,
+                      tintHex: provider.accentHex,
+                      departureId: selectedDepartureId)
+    }
+
+    /// Serveur de tuiles embarqué ; le serveur démo n'en sert pas : MapKit en mode démo.
+    var mapTiles: URL? {
+        MockTrainData.shared.isEnabled ? nil : provider.mapTilesOrigin
     }
 }
 
@@ -236,6 +267,7 @@ struct TrainMapGeometry {
 struct LocalTileMapView: NSViewRepresentable {
     let input: TrainMapInput
     let origin: URL
+    var cornerRadius: CGFloat = 8
 
     /// `map.html` avec MapLibre et pmtiles insérés, lu une fois. `nil` si les ressources
     /// manquent : la carte retombe alors sur MapKit.
@@ -266,7 +298,7 @@ struct LocalTileMapView: NSViewRepresentable {
         web.setValue(false, forKey: "drawsBackground")
         web.allowsMagnification = false
         web.wantsLayer = true
-        web.layer?.cornerRadius = 8
+        web.layer?.cornerRadius = cornerRadius
         web.layer?.masksToBounds = true
         if let html = Self.html {
             web.loadHTMLString(html, baseURL: origin)
@@ -391,6 +423,7 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 /// dessiner de tracé.
 struct AppleMapView: NSViewRepresentable {
     let input: TrainMapInput
+    var cornerRadius: CGFloat = 8
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -408,7 +441,7 @@ struct AppleMapView: NSViewRepresentable {
         // Coins arrondis portés par le calque : `.cornerRadius` de SwiftUI ne rogne pas
         // toujours une vue AppKit sur macOS 11.
         map.wantsLayer = true
-        map.layer?.cornerRadius = 8
+        map.layer?.cornerRadius = cornerRadius
         map.layer?.masksToBounds = true
         return map
     }

@@ -168,13 +168,13 @@ async function start() {
     map.addLayer({
       id: "lgv-remaining", type: "line", source: "lgv-remaining",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": LGV_COLOR, "line-width": 4, "line-opacity": 0.5 },
+      paint: { "line-color": LGV_COLOR, "line-width": 5, "line-opacity": 0.75 },
     }, "travelled");
     map.addSource("lgv-travelled", { type: "geojson", data: multiline([]) });
     map.addLayer({
       id: "lgv-travelled", type: "line", source: "lgv-travelled",
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": LGV_COLOR, "line-width": 4 },
+      paint: { "line-color": LGV_COLOR, "line-width": 5 },
     });
     // Chaque tuile des voies ferrées chargée peut révéler de nouvelles LGV.
     map.on("sourcedata", (event) => {
@@ -196,18 +196,49 @@ function multiline(runs) {
 }
 
 // ——— LGV ———
-// La couche « speeds » des tuiles du train porte la vitesse maximale de chaque voie
-// (OpenStreetMap) ; le style du portail appelle LGV toute voie à plus de 220 km/h. Seules les
-// tuiles déjà chargées sont connues : le repérage se complète à mesure que la carte se déplace.
+// La couche « speeds » des tuiles des voies ferrées du train porte la vitesse maximale de
+// chaque voie (OpenStreetMap) ; le style du portail appelle LGV toute voie à plus de 220 km/h.
+// Deux sources, cumulées :
+// - les tuiles de zoom 8 le long de tout le tracé, lues directement dans l'archive : le
+//   repérage ne dépend pas de ce qui est affiché ;
+// - les tuiles affichées, plus détaillées quand on zoome.
 const LGV_FILTER = [">", ["to-number", ["get", "maxspeed"]], 220];
 const LGV_COLOR = "#F2A900";
+const LGV_ZOOM = 8;
 // Grille d'index (~2 km) et tolérance entre notre tracé et la voie d'OpenStreetMap.
 const LGV_CELL = 0.02;
 const LGV_TOLERANCE_M = 150;
+// Un tronçon du tracé est jugé sur des points répartis le long de lui, tous les ~100 m.
+const LGV_SAMPLE_M = 100;
 const lgvGrid = new Map();
 const lgvSeen = new Set();
-const lgvPoints = new Set();
+const lgvSegments = new Map();
+const lgvTilesDone = new Set();
+let lgvArchive = null;
 let lgvTimer = null;
+
+function addLgvSegment(a, b) {
+  const key = `${a[0].toFixed(5)},${a[1].toFixed(5)}|${b[0].toFixed(5)},${b[1].toFixed(5)}`;
+  if (lgvSeen.has(key)) return false;
+  lgvSeen.add(key);
+  const x0 = Math.floor(Math.min(a[0], b[0]) / LGV_CELL), x1 = Math.floor(Math.max(a[0], b[0]) / LGV_CELL);
+  const y0 = Math.floor(Math.min(a[1], b[1]) / LGV_CELL), y1 = Math.floor(Math.max(a[1], b[1]) / LGV_CELL);
+  if (x1 - x0 > 50 || y1 - y0 > 50) return false;
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      const cell = `${x},${y}`;
+      if (!lgvGrid.has(cell)) lgvGrid.set(cell, []);
+      lgvGrid.get(cell).push([a, b]);
+    }
+  }
+  return true;
+}
+
+// De nouvelles LGV connues : les tronçons jugés « hors LGV » sont à revoir.
+function lgvChanged() {
+  for (const [key, value] of lgvSegments) if (!value) lgvSegments.delete(key);
+  drawLgv();
+}
 
 function scheduleLgvScan() {
   clearTimeout(lgvTimer);
@@ -226,27 +257,189 @@ function scanLgv() {
     const parts = geometry.type === "LineString" ? [geometry.coordinates]
       : geometry.type === "MultiLineString" ? geometry.coordinates : [];
     for (const part of parts) {
-      for (let i = 0; i < part.length - 1; i++) {
-        const a = part[i], b = part[i + 1];
-        const key = `${a[0].toFixed(5)},${a[1].toFixed(5)}|${b[0].toFixed(5)},${b[1].toFixed(5)}`;
-        if (lgvSeen.has(key)) continue;
-        lgvSeen.add(key);
-        added++;
-        const x0 = Math.floor(Math.min(a[0], b[0]) / LGV_CELL), x1 = Math.floor(Math.max(a[0], b[0]) / LGV_CELL);
-        const y0 = Math.floor(Math.min(a[1], b[1]) / LGV_CELL), y1 = Math.floor(Math.max(a[1], b[1]) / LGV_CELL);
-        if (x1 - x0 > 50 || y1 - y0 > 50) continue;
-        for (let x = x0; x <= x1; x++) {
-          for (let y = y0; y <= y1; y++) {
-            const cell = `${x},${y}`;
-            if (!lgvGrid.has(cell)) lgvGrid.set(cell, []);
-            lgvGrid.get(cell).push([a, b]);
-          }
-        }
+      for (let i = 0; i < part.length - 1; i++) if (addLgvSegment(part[i], part[i + 1])) added++;
+    }
+  }
+  if (added) lgvChanged();
+}
+
+// — Tuiles lues dans l'archive, le long du tracé —
+
+function tileOf(point, z) {
+  const n = 2 ** z;
+  const lat = point[1] * Math.PI / 180;
+  const x = Math.floor((point[0] + 180) / 360 * n);
+  const y = Math.floor((1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2 * n);
+  return [Math.min(Math.max(x, 0), n - 1), Math.min(Math.max(y, 0), n - 1)];
+}
+
+async function loadLgvAlongRoute() {
+  const source = map.getStyle().sources.railways;
+  if (!source || !source.url) return;
+  if (!lgvArchive) lgvArchive = new pmtiles.PMTiles(source.url.replace(/^pmtiles:\/\//, ""));
+  const keys = new Set();
+  for (const point of travelledBase.concat(remainingBase)) keys.add(tileOf(point, LGV_ZOOM).join("/"));
+  let added = 0;
+  for (const key of keys) {
+    if (lgvTilesDone.has(key)) continue;
+    lgvTilesDone.add(key);
+    const [x, y] = key.split("/").map(Number);
+    try {
+      const response = await lgvArchive.getZxy(LGV_ZOOM, x, y);
+      if (response && response.data) added += indexLgvTile(new Uint8Array(response.data), LGV_ZOOM, x, y);
+    } catch (e) {
+      lgvTilesDone.delete(key);
+    }
+  }
+  if (added) lgvChanged();
+}
+
+function indexLgvTile(bytes, z, tx, ty) {
+  const layer = mvtLayer(bytes, "speeds");
+  if (!layer) return 0;
+  const n = 2 ** z;
+  const toLngLat = ([px, py]) => {
+    const lng = (tx + px / layer.extent) / n * 360 - 180;
+    const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (ty + py / layer.extent) / n))) * 180 / Math.PI;
+    return [lng, lat];
+  };
+  let added = 0;
+  for (const range of layer.features) {
+    const feature = mvtFeature(bytes, range);
+    let maxspeed = null;
+    for (let i = 0; i + 1 < feature.tags.length; i += 2) {
+      if (layer.keys[feature.tags[i]] === "maxspeed") maxspeed = Number(layer.values[feature.tags[i + 1]]);
+    }
+    if (!(maxspeed > 220) || feature.type !== 2) continue;
+    for (const part of mvtLines(feature.geometry)) {
+      const points = part.map(toLngLat);
+      for (let i = 0; i < points.length - 1; i++) if (addLgvSegment(points[i], points[i + 1])) added++;
+    }
+  }
+  return added;
+}
+
+// — Lecture minimale du format Mapbox Vector Tile (protobuf) —
+
+function varint(bytes, at) {
+  let result = 0, shift = 0, byte;
+  do {
+    byte = bytes[at.i++];
+    result += (byte & 0x7f) * 2 ** shift;
+    shift += 7;
+  } while (byte >= 0x80);
+  return result;
+}
+
+function skipField(bytes, at, wire) {
+  if (wire === 0) varint(bytes, at);
+  else if (wire === 1) at.i += 8;
+  else if (wire === 2) { const length = varint(bytes, at); at.i += length; }
+  else if (wire === 5) at.i += 4;
+}
+
+const utf8 = new TextDecoder();
+function readString(bytes, at) {
+  const length = varint(bytes, at);
+  const text = utf8.decode(bytes.subarray(at.i, at.i + length));
+  at.i += length;
+  return text;
+}
+
+function packed(bytes, at) {
+  const length = varint(bytes, at);
+  const end = at.i + length;
+  const values = [];
+  while (at.i < end) values.push(varint(bytes, at));
+  return values;
+}
+
+function mvtLayer(bytes, wanted) {
+  const at = { i: 0 };
+  while (at.i < bytes.length) {
+    const tag = varint(bytes, at);
+    if (tag >> 3 === 3 && (tag & 7) === 2) {
+      // Longueur lue d'abord : dans « at.i + varint(…) », at.i serait lu avant d'avancer.
+      const layerLength = varint(bytes, at);
+      const end = at.i + layerLength;
+      const layer = { name: "", keys: [], values: [], features: [], extent: 4096 };
+      while (at.i < end) {
+        const field = varint(bytes, at);
+        const number = field >> 3, wire = field & 7;
+        if (number === 1 && wire === 2) layer.name = readString(bytes, at);
+        else if (number === 2 && wire === 2) {
+          const length = varint(bytes, at);
+          layer.features.push([at.i, at.i + length]);
+          at.i += length;
+        } else if (number === 3 && wire === 2) layer.keys.push(readString(bytes, at));
+        else if (number === 4 && wire === 2) layer.values.push(mvtValue(bytes, at));
+        else if (number === 5 && wire === 0) layer.extent = varint(bytes, at);
+        else skipField(bytes, at, wire);
+      }
+      at.i = end;
+      if (layer.name === wanted) return layer;
+    } else {
+      skipField(bytes, at, tag & 7);
+    }
+  }
+  return null;
+}
+
+function mvtValue(bytes, at) {
+  const length = varint(bytes, at);
+  const end = at.i + length;
+  let value = null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  while (at.i < end) {
+    const field = varint(bytes, at);
+    const number = field >> 3, wire = field & 7;
+    if (number === 1) value = readString(bytes, at);
+    else if (number === 2) { value = view.getFloat32(at.i, true); at.i += 4; }
+    else if (number === 3) { value = view.getFloat64(at.i, true); at.i += 8; }
+    else if (number === 4 || number === 5) value = varint(bytes, at);
+    else if (number === 6) { const raw = varint(bytes, at); value = raw % 2 ? -(raw + 1) / 2 : raw / 2; }
+    else if (number === 7) value = varint(bytes, at) !== 0;
+    else skipField(bytes, at, wire);
+  }
+  at.i = end;
+  return value;
+}
+
+function mvtFeature(bytes, [start, end]) {
+  const at = { i: start };
+  const feature = { tags: [], type: 0, geometry: [] };
+  while (at.i < end) {
+    const field = varint(bytes, at);
+    const number = field >> 3, wire = field & 7;
+    if (number === 2 && wire === 2) feature.tags = packed(bytes, at);
+    else if (number === 3 && wire === 0) feature.type = varint(bytes, at);
+    else if (number === 4 && wire === 2) feature.geometry = packed(bytes, at);
+    else skipField(bytes, at, wire);
+  }
+  return feature;
+}
+
+// Commandes MoveTo / LineTo, coordonnées relatives en zigzag.
+function mvtLines(commands) {
+  const lines = [];
+  let x = 0, y = 0, current = null, i = 0;
+  const zigzag = (n) => (n % 2 ? -(n + 1) / 2 : n / 2);
+  while (i < commands.length) {
+    const command = commands[i] & 7, count = Math.floor(commands[i] / 8);
+    i++;
+    if (command === 1 || command === 2) {
+      for (let k = 0; k < count; k++) {
+        x += zigzag(commands[i++]);
+        y += zigzag(commands[i++]);
+        if (command === 1) { current = []; lines.push(current); }
+        current.push([x, y]);
       }
     }
   }
-  if (added) drawLgv();
+  return lines;
 }
+
+// — Classement du tracé —
 
 // Distance d'un point à un segment, en mètres (plan local : suffisant à cette échelle).
 function distanceToSegment(p, a, b) {
@@ -259,29 +452,44 @@ function distanceToSegment(p, a, b) {
   return Math.hypot(ax + t * dx, ay + t * dy);
 }
 
-function isLgv(point) {
-  const key = `${point[0]},${point[1]}`;
-  if (lgvPoints.has(key)) return true;
+function nearLgv(point) {
   const cx = Math.floor(point[0] / LGV_CELL), cy = Math.floor(point[1] / LGV_CELL);
   for (let x = cx - 1; x <= cx + 1; x++) {
     for (let y = cy - 1; y <= cy + 1; y++) {
       for (const [a, b] of lgvGrid.get(`${x},${y}`) || []) {
-        if (distanceToSegment(point, a, b) < LGV_TOLERANCE_M) {
-          lgvPoints.add(key);
-          return true;
-        }
+        if (distanceToSegment(point, a, b) < LGV_TOLERANCE_M) return true;
       }
     }
   }
   return false;
 }
 
-// Suites de points consécutifs sur LGV.
+// Un tronçon est sur LGV si au moins 60 % des points répartis le long de lui le sont : un
+// tronçon long ne se juge plus sur ses deux seules extrémités.
+function segmentOnLgv(a, b) {
+  const key = `${a[0]},${a[1]}|${b[0]},${b[1]}`;
+  if (lgvSegments.has(key)) return lgvSegments.get(key);
+  const kx = 111320 * Math.cos(a[1] * Math.PI / 180), ky = 110540;
+  const length = Math.hypot((b[0] - a[0]) * kx, (b[1] - a[1]) * ky);
+  const samples = Math.min(40, Math.max(2, Math.ceil(length / LGV_SAMPLE_M) + 1));
+  let hits = 0;
+  for (let s = 0; s < samples; s++) {
+    const t = s / (samples - 1);
+    if (nearLgv([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])) hits++;
+  }
+  const onLgv = hits / samples >= 0.6;
+  // Le tronçon qui touche le train change chaque seconde : le cache ne grossit pas sans fin.
+  if (lgvSegments.size > 20000) lgvSegments.clear();
+  lgvSegments.set(key, onLgv);
+  return onLgv;
+}
+
+// Suites de tronçons consécutifs sur LGV.
 function lgvRuns(coordinates) {
   const runs = [];
   let current = null;
   for (let i = 0; i < coordinates.length - 1; i++) {
-    if (isLgv(coordinates[i]) && isLgv(coordinates[i + 1])) {
+    if (segmentOnLgv(coordinates[i], coordinates[i + 1])) {
       if (!current) { current = [coordinates[i]]; runs.push(current); }
       current.push(coordinates[i + 1]);
     } else {
@@ -291,10 +499,12 @@ function lgvRuns(coordinates) {
   return runs;
 }
 
+// Tracés prolongés jusqu'au train : le tronçon qui le touche est jugé comme les autres.
 function drawLgv() {
   if (!loaded || lgvGrid.size === 0) return;
-  const travelled = lgvRuns(travelledBase);
-  const remaining = lgvRuns(remainingBase);
+  const head = train ? [train] : [];
+  const travelled = lgvRuns(travelledBase.concat(head));
+  const remaining = lgvRuns(head.concat(remainingBase));
   map.getSource("lgv-travelled").setData(multiline(travelled));
   map.getSource("lgv-remaining").setData(multiline(remaining));
   document.getElementById("lgv-legend").style.display =
@@ -329,7 +539,8 @@ window.update = function (payload) {
   const head = train ? [train] : [];
   map.getSource("travelled").setData(line(travelledBase.concat(head)));
   map.getSource("remaining").setData(line(head.concat(remainingBase)));
-  if (payload.travelled || payload.remaining) drawLgv();
+  if (payload.travelled || payload.remaining) loadLgvAlongRoute();
+  drawLgv();
 
   if (payload.stopsKey !== undefined && payload.stopsKey !== stopsKey) {
     stopsKey = payload.stopsKey;

@@ -19,6 +19,8 @@ final class MenuBarController: NSObject {
 
     private let store = TrainStore()
     private let popover = NSPopover()
+    /// Fenêtre d'aperçu agrandi de la carte, gardée pour être rouverte telle quelle.
+    private var mapPanel: NSPanel?
     private lazy var panelHost = NSHostingController(rootView: AnyView(TrainPanelView().environmentObject(store)))
 
     /// Vitesse affichée dans la pastille. `nil` = pas de train (icône « réseau inconnu »).
@@ -163,6 +165,7 @@ final class MenuBarController: NSObject {
         store.onCopyJSON = { [weak self] in self?.copyDebugData() }
         store.onOpenAbout = { [weak self] in self?.openAbout() }
         store.onOpenMenu = { [weak self] in self?.openOnboardMenu() }
+        store.onOpenMapPreview = { [weak self] in self?.openMapPreview() }
         store.onCloseMenu = { [weak self] in
             guard let self else { return }
             self.store.route = .main
@@ -172,6 +175,38 @@ final class MenuBarController: NSObject {
             self?.lastArrivalNotifiedStopId = nil
             self?.refresh()
         }
+    }
+
+    // MARK: - Aperçu agrandi de la carte
+
+    /// Fenêtre flottante façon Aperçu du Finder : la carte en grand, tenue à jour en direct,
+    /// redimensionnable, fermée par Échap ou le bouton de fermeture. Une seule à la fois.
+    private func openMapPreview() {
+        popover.performClose(nil)
+        if let mapPanel {
+            mapPanel.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let host = NSHostingController(rootView: AnyView(MapPreviewView().environmentObject(store)))
+        let panel = MapPreviewPanel(contentViewController: host)
+        panel.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        panel.title = "Carte du trajet"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = .floating
+        panel.animationBehavior = .documentWindow
+        panel.minSize = NSSize(width: 420, height: 300)
+        // Environ deux tiers de l'écran, au format de la carte du panneau.
+        let screen = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
+        let width = min(1000, screen.width * 0.66)
+        panel.setContentSize(NSSize(width: width, height: min(width * 0.62, screen.height * 0.75)))
+        panel.center()
+        mapPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func togglePopover() {
@@ -871,5 +906,12 @@ extension MenuBarController: CLLocationManagerDelegate {
         if status == .authorized || status == .authorizedAlways {
             refresh()
         }
+    }
+}
+
+/// Panneau d'aperçu de la carte : Échap le ferme, comme l'Aperçu du Finder.
+private final class MapPreviewPanel: NSPanel {
+    override func cancelOperation(_ sender: Any?) {
+        close()
     }
 }
