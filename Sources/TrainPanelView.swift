@@ -348,10 +348,15 @@ struct MapPreviewView: View {
         Group {
             if case let .connected(state) = store.state,
                state.trainCoordinate != nil || state.stops.contains(where: { $0.coordinate != nil }) {
-                ZStack(alignment: .topLeading) {
-                    TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
-                    PreviewReadouts(state: state)
-                        .padding(12)
+                GeometryReader { geometry in
+                    ZStack(alignment: .topLeading) {
+                        TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
+                        // La carte d'infos suit la taille de la fenêtre : pleine taille dès
+                        // ~900 pt de large, jusqu'à 72 % dans une petite fenêtre.
+                        PreviewReadouts(state: state)
+                            .scaleEffect(min(1, max(0.72, geometry.size.width / 900)), anchor: .topLeading)
+                            .padding(10)
+                    }
                 }
             } else {
                 Text("Carte indisponible")
@@ -363,13 +368,17 @@ struct MapPreviewView: View {
     }
 }
 
-/// Carte d'infos de l'aperçu, en surbrillance en haut à gauche, une info par ligne : vitesse,
+/// Carte d'infos de l'aperçu, en verre en haut à gauche, une info par ligne : vitesse,
 /// kilomètres restants, durée jusqu'à ma gare d'arrivée, prochaine gare et durée pour
 /// l'atteindre, altitude. Les durées sont recalculées chaque seconde.
 private struct PreviewReadouts: View {
     let state: TrainViewState
     @State private var now = Date()
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    /// Colonne des unités, de largeur fixe (celle de « km/h ») : tous les chiffres finissent
+    /// sur le même bord, qu'il y ait une unité ou non.
+    private let unitWidth: CGFloat = 24
 
     private var arrival: StopRow? {
         state.stops.first { $0.id == state.selectedArrivalId }
@@ -381,18 +390,22 @@ private struct PreviewReadouts: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             row(symbol: "speedometer", label: "Vitesse", value: "\(state.speedKmh)", unit: "km/h")
             if let km = state.remainingKm {
                 row(symbol: "mappin.and.ellipse", label: "Restants", value: DistanceFormat.km(km), unit: "km")
             }
             if let arrival, let date = arrival.arrivalDate, date > now {
-                row(symbol: "flag", label: "Arrivée à \(arrival.label)",
-                    value: Self.duration(date.timeIntervalSince(now)))
+                let left = Self.duration(date.timeIntervalSince(now))
+                row(symbol: "flag", label: "Arrivée à \(arrival.label)", value: left.value, unit: left.unit)
             }
             if let next = nextStop, next.id != arrival?.id {
-                row(symbol: "clock", label: "Prochaine gare · \(next.label)",
-                    value: next.arrivalDate.map { $0 > now ? Self.duration($0.timeIntervalSince(now)) : "À quai" } ?? "—")
+                if let date = next.arrivalDate, date > now {
+                    let left = Self.duration(date.timeIntervalSince(now))
+                    row(symbol: "clock", label: "Prochaine gare · \(next.label)", value: left.value, unit: left.unit)
+                } else {
+                    row(symbol: "clock", label: "Prochaine gare · \(next.label)", value: "À quai")
+                }
             }
             if let altitude = state.altitudeM {
                 row(symbol: "mountain.2", label: "Altitude", value: "\(Int(altitude.rounded()))", unit: "m")
@@ -400,48 +413,82 @@ private struct PreviewReadouts: View {
         }
         // Largeur de la ligne la plus longue : les valeurs s'alignent à droite.
         .fixedSize()
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.windowBackgroundColor).opacity(0.92)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
-        .shadow(color: Color.black.opacity(0.2), radius: 6, y: 2)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .modifier(LiquidGlass(cornerRadius: 12))
         .onReceive(clock) { now = $0 }
     }
 
-    /// Une info par ligne : pictogramme et libellé à gauche, valeur alignée à droite.
+    /// Une info par ligne : pictogramme et libellé à gauche, valeur alignée à droite, unité
+    /// dans sa colonne.
     private func row(symbol: String, label: String, value: String, unit: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(state.provider.accent)
-                .frame(width: 16)
+                .frame(width: 14)
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: 190, alignment: .leading)
-            Spacer(minLength: 14)
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value)
-                    // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
-                    .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)))
-                if let unit {
-                    Text(unit)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-            }
+                .frame(maxWidth: 170, alignment: .leading)
+            Spacer(minLength: 12)
+            Text(value)
+                // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
+                .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)))
+            Text(unit ?? "")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: unitWidth, alignment: .leading)
         }
     }
 
-    /// « 1h02 », « 47 min ».
-    private static func duration(_ seconds: TimeInterval) -> String {
+    /// « 47 » + « min », ou « 1h02 » sans unité.
+    private static func duration(_ seconds: TimeInterval) -> (value: String, unit: String?) {
         let minutes = Int(seconds / 60)
-        guard minutes >= 60 else { return "\(max(1, minutes)) min" }
-        let rest = minutes % 60
-        return "\(minutes / 60)h" + String(format: "%02d", rest)
+        guard minutes >= 60 else { return ("\(max(1, minutes))", "min") }
+        return ("\(minutes / 60)h" + String(format: "%02d", minutes % 60), nil)
     }
+}
+
+/// Fond en verre : le vrai Liquid Glass sur macOS 26 (Tahoe), un flou translucide du système
+/// avant. Le test de compilateur couvre un SDK trop ancien pour connaître `glassEffect`.
+private struct LiquidGlass: ViewModifier {
+    let cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius))
+        } else {
+            fallback(content)
+        }
+        #else
+        fallback(content)
+        #endif
+    }
+
+    private func fallback(_ content: Content) -> some View {
+        content
+            .background(TranslucentBlur().clipShape(RoundedRectangle(cornerRadius: cornerRadius)))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.35), lineWidth: 0.5))
+            .shadow(color: Color.black.opacity(0.15), radius: 8, y: 2)
+    }
+}
+
+/// Flou du système sur ce qui est derrière, dans la fenêtre (la carte).
+private struct TranslucentBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .popover
+        view.blendingMode = .withinWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 // MARK: - En détail
