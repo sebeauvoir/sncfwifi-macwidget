@@ -42,6 +42,10 @@ final class MenuBarController: NSObject {
 
     /// Kilomètres restants jusqu'à la gare d'arrivée choisie, à droite de la vitesse.
     private var remainingKm: Double?
+    /// Heure d'arrivée réelle à la gare d'arrivée choisie, pour la durée restante de la pastille.
+    private var arrivalDate: Date?
+    /// Durée restante dessinée en dernier, pour ne redessiner qu'à son changement.
+    private var drawnRemainingTime: String?
     /// Valeur de l'API (SNCF, ICE), relue à chaque cycle complet.
     private var sourceRemainingKm: Double?
     /// Distance parcourue d'après le GPS depuis cette lecture : retranchée à la valeur de
@@ -123,6 +127,7 @@ final class MenuBarController: NSObject {
         }
         speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.refreshSpeed()
+            self?.redrawIfRemainingTimeChanged()
         }
     }
 
@@ -199,19 +204,36 @@ final class MenuBarController: NSObject {
 
     // MARK: - Pastille
 
-    /// La pastille affiche la vitesse, les kilomètres restants à sa droite quand ils sont
-    /// connus, unités en petit sous les valeurs, et la jauge de progression du trajet en
-    /// dessous quand le réseau expose une desserte.
+    /// La pastille affiche la vitesse, la durée restante jusqu'à la gare d'arrivée choisie à
+    /// sa droite quand elle est connue, unités en petit sous les valeurs, et la jauge de
+    /// progression de mon trajet en dessous quand le réseau expose une desserte.
     private func redrawTitle() {
         guard let speedKmh else { return }
         var readouts = [StatusBarImageGenerator.Readout(value: "\(speedKmh)", unit: "km/h", template: "888")]
-        if let remainingKm {
-            readouts.append(.init(value: DistanceFormat.km(remainingKm), unit: "km", template: "888"))
+        let remaining = remainingTime()
+        if let remaining {
+            readouts.append(.init(value: remaining.value, unit: remaining.unit, template: "8h88"))
         }
+        drawnRemainingTime = remaining?.value
         guard let image = StatusBarImageGenerator.draw(readouts: readouts, progress: progress) else { return }
         statusItem.button?.title = ""
         statusItem.button?.image = image
         statusItem.button?.imagePosition = .imageOnly
+    }
+
+    /// Durée restante jusqu'à l'heure d'arrivée réelle de la gare d'arrivée choisie : « 47 min »
+    /// ou « 1h02 », toujours sur « restant » (pour ne pas la prendre pour une heure).
+    private func remainingTime() -> (value: String, unit: String)? {
+        guard let arrivalDate, arrivalDate > Date() else { return nil }
+        let minutes = Int(arrivalDate.timeIntervalSinceNow / 60)
+        guard minutes >= 60 else { return ("\(max(1, minutes)) min", "restant") }
+        return ("\(minutes / 60)h" + String(format: "%02d", minutes % 60), "restant")
+    }
+
+    /// Appelée chaque seconde : la durée restante change aussi quand le train est à l'arrêt.
+    private func redrawIfRemainingTimeChanged() {
+        guard speedKmh != nil, remainingTime()?.value != drawnRemainingTime else { return }
+        redrawTitle()
     }
 
     // MARK: - Kilomètres restants
@@ -529,6 +551,7 @@ final class MenuBarController: NSObject {
             self.speedKmh = nil
             self.progress = nil
             self.remainingKm = nil
+            self.arrivalDate = nil
             self.sourceRemainingKm = nil
             self.movedSinceSource = 0
             self.lastLiveCoordinate = nil
@@ -576,6 +599,7 @@ final class MenuBarController: NSObject {
 
             var viewState = snapshot.viewState
             self.resolveDeparture(&viewState)
+            self.arrivalDate = viewState.stops.first { $0.id == viewState.selectedArrivalId }?.arrivalDate
             self.startTripIfNeeded(viewState, source: source)
             self.recordTrail(viewState.trainCoordinate)
             viewState.trail = self.trail

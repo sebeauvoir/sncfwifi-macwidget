@@ -70,7 +70,7 @@ class StatusBarImageGenerator {
         return image
     }
 
-    /// Jauge arrondie, partie parcourue pleine et pouce de progression.
+    /// Jauge arrondie, partie parcourue pleine. Pas de pouce : il empiétait sur les unités.
     private static func drawProgress(_ progress: Double, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
         let radius = height / 2
         NSColor.black.withAlphaComponent(0.3).setFill()
@@ -82,12 +82,5 @@ class StatusBarImageGenerator {
             NSColor.black.setFill()
             NSBezierPath(roundedRect: NSRect(x: x, y: y, width: filled, height: height), xRadius: radius, yRadius: radius).fill()
         }
-
-        // Pouce, borné pour ne pas déborder de la jauge.
-        let thumbRadius: CGFloat = 3
-        let thumbX = min(max(x + filled - thumbRadius, x - thumbRadius), x + width - thumbRadius)
-        let thumbRect = NSRect(x: thumbX, y: y + radius - thumbRadius, width: thumbRadius * 2, height: thumbRadius * 2)
-        NSColor.black.setFill()
-        NSBezierPath(ovalIn: thumbRect).fill()
     }
 }

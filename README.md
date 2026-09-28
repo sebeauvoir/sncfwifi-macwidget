@@ -20,15 +20,17 @@ qui est disponible dans chaque train.
 
 ## Le widget 🖥️
 
-**Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
-kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en petit sous les valeurs, jauge
-de progression de **mon** trajet en dessous (de la gare de départ à la gare d'arrivée choisies, d'après les distances) quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
-kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` des tronçons jusqu'à
-l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
-seconde de la distance parcourue d'après le GPS entre deux lectures ; à défaut, le long du tracé
-publié (Lyria) ou de gare en gare. Elle est relue chaque seconde via un seul endpoint léger ; le reste des
+**Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite la
+durée restante jusqu'à la gare d'arrivée choisie (« 47 min » ou « 1h02 », sur « restant ») ; unités en
+petit sous les valeurs, jauge de progression de **mon** trajet en dessous (de la gare de départ à
+la gare d'arrivée choisies, d'après les distances) quand le réseau expose une desserte (SNCF, ICE,
+Lyria). Vitesse et position sont relues chaque seconde via un seul endpoint léger ; le reste des
 données est rafraîchi toutes les 5 s.
-Prochain arrêt, temps restant et retard restent consultables dans le panneau.
+
+Les kilomètres restants, affichés dans le panneau, sont ceux de l'API (SNCF : somme des
+`progress.remainingDistance` des tronçons jusqu'à l'arrivée, comme « Suivi du trajet » sur le
+portail ; ICE : `distanceFromStart`), diminués chaque seconde de la distance parcourue d'après le
+GPS entre deux lectures ; à défaut, le long du tracé publié (Lyria) ou de gare en gare.
 
 **Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte avec les
 horaires théoriques barrés en cas de retard et les durées d'arrêt, repliée avant ma gare de départ et après ma gare d'arrivée (un clic la déplie) ; une carte du trajet, à la manière de
