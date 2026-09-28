@@ -119,6 +119,7 @@ private struct NotConnectedView: View {
 // MARK: - Contenu train connecté
 
 private struct ConnectedView: View {
+    @EnvironmentObject var store: TrainStore
     let state: TrainViewState
 
     var body: some View {
@@ -135,18 +136,10 @@ private struct ConnectedView: View {
                 }
 
                 if showsMap {
-                    TrainMapView(
-                        input: TrainMapInput(stops: state.stops,
-                                             train: state.trainCoordinate,
-                                             arrivalId: state.selectedArrivalId,
-                                             routePath: state.routePath,
-                                             trail: state.trail,
-                                             tintHex: state.provider.accentHex,
-                                             departureId: state.selectedDepartureId),
-                        // Le serveur démo ne sert pas de tuiles : MapKit en mode démo.
-                        localTiles: MockTrainData.shared.isEnabled ? nil : state.provider.mapTilesOrigin
-                    )
-                    .frame(height: mapHeight)
+                    TrainMapView(input: state.mapInput,
+                                 localTiles: state.mapTiles,
+                                 onExpand: { store.onOpenMapPreview() })
+                        .frame(height: mapHeight)
                 }
 
                 if !state.metrics.isEmpty {
@@ -342,6 +335,27 @@ private struct MetricsView: View {
         }
         flush()
         return groups
+    }
+}
+
+// MARK: - Aperçu agrandi de la carte
+
+/// Contenu de la fenêtre d'aperçu : la même carte, en grand, tenue à jour par le store.
+struct MapPreviewView: View {
+    @EnvironmentObject var store: TrainStore
+
+    var body: some View {
+        Group {
+            if case let .connected(state) = store.state,
+               state.trainCoordinate != nil || state.stops.contains(where: { $0.coordinate != nil }) {
+                TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
+            } else {
+                Text("Carte indisponible")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(minWidth: 420, minHeight: 300)
     }
 }
 
