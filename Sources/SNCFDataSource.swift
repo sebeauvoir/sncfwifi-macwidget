@@ -409,12 +409,15 @@ final class SNCFDataSource: TrainDataSource {
         // La table du portail ne couvre que des trajets intérieurs (119 couples de gares
         // françaises relevés à bord) : un train vers l'étranger n'y figure pas.
         if client.co2Table != nil {
+            // Formulation du portail (« Suivi du trajet ») : « −97 % de CO2e par rapport au
+            // même trajet effectué en voiture thermique ». Chiffre fixe pour le trajet du train.
             if let co2 = co2Percent() {
                 tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
-                                         label: "CO₂ vs voiture", value: "−\(co2) %"))
+                                         label: "Émissions vs voiture", value: "−\(co2) % de CO₂e",
+                                         note: "Même trajet en voiture thermique"))
             } else {
                 tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
-                                         label: "CO₂ vs voiture", value: "Non publié pour ce trajet",
+                                         label: "Émissions vs voiture", value: "Non publié",
                                          note: "Le portail ne couvre que des trajets intérieurs"))
             }
         }
