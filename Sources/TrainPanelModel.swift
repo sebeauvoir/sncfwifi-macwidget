@@ -66,7 +66,7 @@ struct MetricRow: Identifiable {
     }
 }
 
-/// Tuile de la section « En vrac » : petit libellé au-dessus, valeur en gras.
+/// Tuile de la section « En détail » : petit libellé au-dessus, valeur en gras.
 struct ExtraMetric: Identifiable {
     let id: String
     let symbol: String
