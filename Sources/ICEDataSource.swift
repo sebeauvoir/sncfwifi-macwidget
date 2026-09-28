@@ -60,7 +60,8 @@ final class ICEDataSource: TrainDataSource {
                 status: status,
                 platform: stop.platform,
                 scheduledPlatform: stop.scheduledPlatform,
-                coordinate: LiveFix.coordinate(latitude: stop.latitude, longitude: stop.longitude)
+                coordinate: LiveFix.coordinate(latitude: stop.latitude, longitude: stop.longitude),
+                distanceFromStartKm: snap.totalDistanceM > 0 ? Double(stop.distanceFromStart) / 1000 : nil
             )
         }
 

@@ -37,6 +37,7 @@
     display: flex; align-items: center; justify-content: center;
   }
   .badge svg { width: 58%; height: 58%; fill: #fff; }
+  .badge:empty { border-width: 1.5px; }
 </style>
 <script>/*MAPLIBRE_JS*/</script>
 <script>/*PMTILES_JS*/</script>
@@ -192,9 +193,11 @@ window.update = function (payload) {
     stopsKey = payload.stopsKey;
     stopMarkers.forEach((marker) => marker.remove());
     stopMarkers = payload.stops.map((stop) => {
-      const size = stop.arrival ? 26 : (stop.status === "passed" ? 16 : 20);
+      // Mes gares de départ et d'arrivée un peu plus grandes ; les autres, discrètes.
+      const size = stop.arrival ? 18 : (stop.status === "passed" ? 10 : 13);
       const color = stop.status === "passed" ? PASSED : tint;
-      return new maplibregl.Marker({ element: badge(STATION, size, color, stop.label) })
+      // Pictogramme sur mes deux gares seulement : les autres restent de simples points.
+      return new maplibregl.Marker({ element: badge(stop.arrival ? STATION : "", size, color, stop.label) })
         .setLngLat(stop.c).addTo(map);
     });
   }

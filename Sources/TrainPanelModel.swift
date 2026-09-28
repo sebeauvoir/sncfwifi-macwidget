@@ -26,6 +26,11 @@ struct StopRow: Identifiable {
     var scheduledPlatform: String?
     /// Position de la gare, pour la carte. `nil` quand le réseau ne la publie pas.
     var coordinate: CLLocationCoordinate2D?
+    /// Distance depuis l'origine du train, quand l'API la donne : sert à mesurer le trajet
+    /// entre les gares de départ et d'arrivée choisies.
+    var distanceFromStartKm: Double?
+    /// Durée d'arrêt annoncée, en minutes (gares intermédiaires).
+    var dwellMinutes: Int?
 
     /// Vrai quand la voie annoncée n'est plus celle prévue.
     var platformChanged: Bool {
@@ -67,7 +72,9 @@ struct ExtraMetric: Identifiable {
     let symbol: String
     let label: String
     let value: String
-    /// Pleine largeur, valeur sur plusieurs lignes (durées d'arrêt).
+    /// Petite précision grise sous la valeur (limite de l'API…).
+    var note: String?
+    /// Pleine largeur, valeur sur plusieurs lignes.
     var wide = false
 }
 
@@ -152,6 +159,9 @@ struct TrainViewState {
 
     var arrivalOptions: [ArrivalOption] = []
     var selectedArrivalId: String?
+    /// Gare de départ choisie (par défaut l'origine du train) : avec la gare d'arrivée, elle
+    /// borne la jauge de progression et replie la desserte hors du trajet.
+    var selectedDepartureId: String?
 
 }
 
@@ -224,6 +234,7 @@ final class TrainStore: ObservableObject {
     var onRefresh: () -> Void = {}
     var onQuit: () -> Void = {}
     var onSelectArrival: (String) -> Void = { _ in }
+    var onSelectDeparture: (String) -> Void = { _ in }
     var onToggleDemo: () -> Void = {}
     /// Change le réseau simulé en mode démo (le serveur local sert les deux plateformes),
     /// désigné par l'identifiant de son descripteur.
