@@ -406,45 +406,11 @@ final class SNCFDataSource: TrainDataSource {
                                      label: "Bar", value: empty ? "Pas d'attente" : "File d'attente",
                                      note: "Oui / non seulement, sans durée"))
         }
-        // La table du portail ne couvre que des trajets intérieurs (119 couples de gares
-        // françaises relevés à bord) : un train vers l'étranger n'y figure pas.
-        if client.co2Table != nil {
-            // Formulation du portail (« Suivi du trajet ») : « −97 % de CO2e par rapport au
-            // même trajet effectué en voiture thermique ». Chiffre fixe pour le trajet du train.
-            if let co2 = co2Percent() {
-                tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
-                                         label: "Émissions vs voiture", value: "−\(co2) % de CO₂e",
-                                         note: "Même trajet en voiture thermique"))
-            } else {
-                tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
-                                         label: "Émissions vs voiture", value: "Non publié",
-                                         note: "Le portail ne couvre que des trajets intérieurs"))
-            }
-        }
         if let rame = client.lastDetails?["trainId"].map({ "\($0)" }), !rame.isEmpty {
             tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
         }
 
         return tiles
-    }
-
-    /// Part de CO₂ évitée par rapport à la voiture (« 97 »), d'après la table du portail et les
-    /// codes UIC du trajet. Le portail cherche le couple dans les deux sens.
-    private func co2Percent() -> String? {
-        guard let codes = client.lastDetails?["stationUicCodes"] as? [String: Any],
-              let departure = codes["departure"] as? String,
-              let arrival = codes["arrival"] as? String,
-              let table = client.co2Table
-        else { return nil }
-        let entry = table.first { row in
-            let origin = row["origine_uic"] as? String
-            let destination = row["destination_uic"] as? String
-            return (origin == departure && destination == arrival) || (origin == arrival && destination == departure)
-        }
-        guard let value = (entry?["co2"] as? String)?.replacingOccurrences(of: "%", with: ""),
-              !value.isEmpty
-        else { return nil }
-        return value.trimmingCharacters(in: .whitespaces)
     }
 
     /// « 1h02 », « 45 min ».
