@@ -67,6 +67,8 @@ struct TrainMapInput {
     let tintHex: UInt32
     /// Mode suivi, posé par `TrainMapView` d'après le bouton.
     var follow = false
+    /// Ma gare de départ : pastille mise en avant comme la gare d'arrivée.
+    var departureId: String?
 
     func with(follow: Bool) -> TrainMapInput {
         var copy = self
@@ -87,6 +89,7 @@ struct TrainMapGeometry {
     struct Output {
         let located: [StopRow]
         let arrivalId: String?
+        let departureId: String?
         let travelled: [CLLocationCoordinate2D]
         let remaining: [CLLocationCoordinate2D]
         /// Change quand les tracés changent ; stable tant que seul le train bouge.
@@ -107,7 +110,8 @@ struct TrainMapGeometry {
         let arrivalIndex = located.firstIndex { $0.id == input.arrivalId }
         let arrival = arrivalIndex.flatMap { located[$0].coordinate }
         let train = input.train
-        let stopsKey = located.map { "\($0.id):\($0.status)" }.joined(separator: "|") + "→\(input.arrivalId ?? "")"
+        let stopsKey = located.map { "\($0.id):\($0.status)" }.joined(separator: "|")
+            + "↦\(input.departureId ?? "")→\(input.arrivalId ?? "")"
 
         var travelled: [CLLocationCoordinate2D]
         var remaining: [CLLocationCoordinate2D]
@@ -158,6 +162,7 @@ struct TrainMapGeometry {
 
         return Output(located: located,
                       arrivalId: input.arrivalId,
+                      departureId: input.departureId,
                       travelled: travelled,
                       remaining: remaining,
                       linesKey: linesKey,
@@ -305,7 +310,8 @@ struct LocalTileMapView: NSViewRepresentable {
                     return ["c": [coordinate.longitude, coordinate.latitude],
                             "label": stop.label,
                             "status": Self.status(stop.status),
-                            "arrival": stop.id == output.arrivalId]
+                            // Ma gare de départ ou d'arrivée : pastille plus grande.
+                            "arrival": stop.id == output.arrivalId || stop.id == output.departureId]
                 }
             }
             if let frame = output.frame {
@@ -444,7 +450,9 @@ struct AppleMapView: NSViewRepresentable {
             if output.stopsKey != stopsKey {
                 stopsKey = output.stopsKey
                 map.removeAnnotations(stopAnnotations)
-                stopAnnotations = output.located.map { StopAnnotation($0, isArrival: $0.id == output.arrivalId) }
+                stopAnnotations = output.located.map {
+                    StopAnnotation($0, isArrival: $0.id == output.arrivalId || $0.id == output.departureId)
+                }
                 map.addAnnotations(stopAnnotations)
             }
 
@@ -587,8 +595,9 @@ struct AppleMapView: NSViewRepresentable {
                 let view = mapView.dequeueReusableAnnotationView(withIdentifier: "stop")
                     ?? MKAnnotationView(annotation: stop, reuseIdentifier: "stop")
                 view.annotation = stop
-                let diameter: CGFloat = stop.isArrival ? 26 : (stop.status == .passed ? 16 : 20)
-                view.image = Self.badge(symbol: "building.columns.fill",
+                let diameter: CGFloat = stop.isArrival ? 18 : (stop.status == .passed ? 10 : 13)
+                // Pictogramme sur mes deux gares seulement : les autres restent de simples points.
+                view.image = Self.badge(symbol: stop.isArrival ? "building.columns.fill" : nil,
                                         diameter: diameter,
                                         fill: stop.status == .passed ? .secondaryLabelColor : tint)
                 view.toolTip = stop.title
@@ -611,7 +620,7 @@ struct AppleMapView: NSViewRepresentable {
 
         /// Pastille ronde cerclée de blanc, pictogramme blanc au centre. Les couleurs
         /// dynamiques sont résolues au dessin : elle suit le thème clair / sombre.
-        private static func badge(symbol: String, diameter: CGFloat, fill: NSColor) -> NSImage {
+        private static func badge(symbol: String?, diameter: CGFloat, fill: NSColor) -> NSImage {
             let ring: CGFloat = 2
             let size = NSSize(width: diameter, height: diameter)
             return NSImage(size: size, flipped: false) { rect in
@@ -621,7 +630,8 @@ struct AppleMapView: NSViewRepresentable {
                 NSBezierPath(ovalIn: rect.insetBy(dx: ring, dy: ring)).fill()
 
                 let configuration = NSImage.SymbolConfiguration(pointSize: diameter * 0.46, weight: .semibold)
-                guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                guard let symbol,
+                      let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                         .withSymbolConfiguration(configuration)
                 else { return true }
                 // Pictogramme passé en blanc : dessiné, puis recouvert en mode « source atop ».

@@ -22,7 +22,7 @@ qui est disponible dans chaque train.
 
 **Pastille** — la vitesse du train, en permanence et sur tous les réseaux, et à sa droite les
 kilomètres restants jusqu'à la gare d'arrivée choisie ; unités en petit sous les valeurs, jauge
-de progression du trajet en dessous quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
+de progression de **mon** trajet en dessous (de la gare de départ à la gare d'arrivée choisies, d'après les distances) quand le réseau expose une desserte (SNCF, ICE, Lyria). Les
 kilomètres sont ceux de l'API (SNCF : somme des `progress.remainingDistance` des tronçons jusqu'à
 l'arrivée, comme « Suivi du trajet » sur le portail ; ICE : `distanceFromStart`), diminués chaque
 seconde de la distance parcourue d'après le GPS entre deux lectures ; à défaut, le long du tracé
@@ -30,8 +30,8 @@ publié (Lyria) ou de gare en gare. Elle est relue chaque seconde via un seul en
 données est rafraîchi toutes les 5 s.
 Prochain arrêt, temps restant et retard restent consultables dans le panneau.
 
-**Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte complète avec les
-horaires théoriques barrés en cas de retard ; une carte du trajet, à la manière de
+**Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte avec les
+horaires théoriques barrés en cas de retard et les durées d'arrêt, repliée avant ma gare de départ et après ma gare d'arrivée (un clic la déplie) ; une carte du trajet, à la manière de
 `wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
 relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
 du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
@@ -39,7 +39,7 @@ main suspend le suivi une minute) ; **suivi**, train toujours au centre, la cart
 et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. En bas du panneau, une section
 **En vrac** (WiFi SNCF) rassemble le reste de ce que l'API expose : altitude, cap, distance
 parcourue, vitesse moyenne, temps restant, débit accordé, attente au bar, CO₂ évité par rapport à
-la voiture, durées d'arrêt, numéro de rame. Le tracé suit les voies quand le réseau le
+la voiture, numéro de rame. Le tracé suit les voies quand le réseau le
 publie (SNCF, Lyria) ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les
@@ -47,7 +47,7 @@ autres réseaux n'embarquant pas de tuiles, leur carte utilise le fond Apple, ch
 Internet ; puis les métriques propres au réseau. Un second
 écran affiche la carte du bar quand le réseau la publie.
 
-**Réglages** — gare d'arrivée de référence (elle pilote l'ETA et la progression), notification
+**Réglages** — gares de départ et d'arrivée de référence (elles pilotent l'ETA, la progression et le repli de la desserte), notification
 système 5 / 10 / 15 min avant l'arrivée, notification de changement de voie.
 
 ---

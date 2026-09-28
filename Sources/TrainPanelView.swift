@@ -128,7 +128,10 @@ private struct ConnectedView: View {
 
                 if !state.stops.isEmpty {
                     Divider()
-                    TimelineView(stops: state.stops, tint: state.provider.accent)
+                    TimelineView(stops: state.stops,
+                                 departureId: state.selectedDepartureId,
+                                 arrivalId: state.selectedArrivalId,
+                                 tint: state.provider.accent)
                 }
 
                 if showsMap {
@@ -138,7 +141,8 @@ private struct ConnectedView: View {
                                              arrivalId: state.selectedArrivalId,
                                              routePath: state.routePath,
                                              trail: state.trail,
-                                             tintHex: state.provider.accentHex),
+                                             tintHex: state.provider.accentHex,
+                                             departureId: state.selectedDepartureId),
                         // Le serveur démo ne sert pas de tuiles : MapKit en mode démo.
                         localTiles: MockTrainData.shared.isEnabled ? nil : state.provider.mapTilesOrigin
                     )
@@ -378,6 +382,12 @@ private struct ExtraMetricsView: View {
                     .lineLimit(metric.wide ? nil : 1)
                     .minimumScaleFactor(0.85)
                     .fixedSize(horizontal: false, vertical: metric.wide)
+                if let note = metric.note {
+                    Text(note)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -386,19 +396,92 @@ private struct ExtraMetricsView: View {
 
 // MARK: - Timeline des arrêts
 
+/// Desserte, repliée hors de mon trajet : les gares avant ma gare de départ et après ma gare
+/// d'arrivée tiennent chacune sur une ligne « ⋯ 3 arrêts avant », qui se déplie au clic.
 private struct TimelineView: View {
     let stops: [StopRow]
+    let departureId: String?
+    let arrivalId: String?
     let tint: Color
+
+    @State private var showsBefore = false
+    @State private var showsAfter = false
+
+    private var departureIndex: Int {
+        stops.firstIndex { $0.id == departureId } ?? 0
+    }
+
+    private var arrivalIndex: Int {
+        stops.firstIndex { $0.id == arrivalId } ?? stops.count - 1
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            let before = departureIndex
+            let after = stops.count - 1 - arrivalIndex
+            if before > 0 {
+                FoldRow(count: before, place: "avant", station: stops[departureIndex].label,
+                        isOpen: $showsBefore, isFirst: true)
+            }
             ForEach(Array(stops.enumerated()), id: \.element.id) { index, stop in
-                StopRowView(stop: stop,
-                            tint: tint,
-                            isFirst: index == 0,
-                            isLast: index == stops.count - 1)
+                if isVisible(index) {
+                    StopRowView(stop: stop,
+                                tint: tint,
+                                isFirst: index == 0 || (index == departureIndex && !showsBefore),
+                                isLast: index == stops.count - 1 || (index == arrivalIndex && !showsAfter),
+                                isEndpoint: index == departureIndex || index == arrivalIndex)
+                }
+            }
+            if after > 0 {
+                FoldRow(count: after, place: "après", station: stops[arrivalIndex].label,
+                        isOpen: $showsAfter, isFirst: false)
             }
         }
+    }
+
+    private func isVisible(_ index: Int) -> Bool {
+        if index < departureIndex { return showsBefore }
+        if index > arrivalIndex { return showsAfter }
+        return true
+    }
+}
+
+/// « ⋯ 3 arrêts avant Marseille » : replie ou déplie les gares hors de mon trajet.
+private struct FoldRow: View {
+    let count: Int
+    let place: String
+    let station: String
+    @Binding var isOpen: Bool
+    let isFirst: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { isOpen.toggle() }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 18)
+                Text(isOpen
+                     ? "Masquer les \(count) arrêt\(count > 1 ? "s" : "") \(place) \(station)"
+                     : "\(count) arrêt\(count > 1 ? "s" : "") \(place) \(station)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+            }
+            .padding(.vertical, 4)
+            .padding(.bottom, isFirst ? 6 : 0)
+            .padding(.top, isFirst ? 0 : 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
@@ -407,6 +490,8 @@ private struct StopRowView: View {
     let tint: Color
     let isFirst: Bool
     let isLast: Bool
+    /// Ma gare de départ ou d'arrivée : nom en gras.
+    var isEndpoint = false
 
     private var dotColor: Color {
         stop.status == .upcoming ? .secondary : tint
@@ -462,11 +547,18 @@ private struct StopRowView: View {
             .frame(width: 18)
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(stop.label)
-                    .font(.system(size: 12, weight: stop.status == .current ? .semibold : .regular))
-                    .foregroundColor(stop.status == .upcoming ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(stop.label)
+                        .font(.system(size: 12, weight: stop.status == .current || isEndpoint ? .semibold : .regular))
+                        .foregroundColor(stop.status == .upcoming && !isEndpoint ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if let dwell = stop.dwellMinutes {
+                        Text("arrêt \(dwell) min")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
                 Spacer(minLength: 4)
                 if stop.delayMin > 0 && !stop.theoricTime.isEmpty && stop.theoricTime != stop.realTime {
                     Text(stop.theoricTime)
@@ -778,6 +870,15 @@ private struct FooterView: View {
     private var settingsMenu: some View {
         Menu {
             if let arrival = arrival {
+                Menu("Gare de départ") {
+                    ForEach(arrival.options) { option in
+                        Button {
+                            store.onSelectDeparture(option.id)
+                        } label: {
+                            checkLabel(option.label, on: option.id == connectedState?.selectedDepartureId)
+                        }
+                    }
+                }
                 Menu("Gare d'arrivée") {
                     ForEach(arrival.options) { option in
                         Button {

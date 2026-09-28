@@ -239,6 +239,21 @@ final class SNCFDataSource: TrainDataSource {
             speedKmh: speed
         )
 
+        // Distance depuis l'origine : chaque arrêt porte la progression du tronçon qui le
+        // relie au suivant ; sa longueur est parcouru + restant. `nil` dès qu'un tronçon manque.
+        var fromStart: [Double?] = []
+        var cumulative: Double? = 0
+        for stop in allStops {
+            fromStart.append(cumulative)
+            let progress = stop["progress"] as? [String: Any]
+            if let travelled = APIValue.double(progress?["traveledDistance"]),
+               let remaining = APIValue.double(progress?["remainingDistance"]) {
+                cumulative = cumulative.map { $0 + (travelled + remaining) / 1000 }
+            } else {
+                cumulative = nil
+            }
+        }
+
         // Desserte (timeline)
         viewState.stops = allStops.enumerated().map { (i, stop) -> StopRow in
             let lbl = (stop["label"] as? String) ?? "?"
@@ -255,7 +270,12 @@ final class SNCFDataSource: TrainDataSource {
                 coordinate: (stop["coordinates"] as? [String: Any]).flatMap {
                     LiveFix.coordinate(latitude: APIValue.double($0["latitude"]),
                                        longitude: APIValue.double($0["longitude"]))
-                }
+                },
+                distanceFromStartKm: fromStart[i],
+                // Gares intermédiaires seulement : l'origine et le terminus annoncent 0.
+                dwellMinutes: (i > 0 && i < allStops.count - 1)
+                    ? APIValue.int(stop["duration"]).nonZero
+                    : nil
             )
         }
         viewState.trainCoordinate = LiveFix.coordinate(latitude: currentLat, longitude: currentLon)
@@ -381,8 +401,10 @@ final class SNCFDataSource: TrainDataSource {
                                      label: "Débit accordé", value: "\(Int((bandwidth / 1000).rounded())) Mbit/s"))
         }
         if let empty = bar?["isBarQueueEmpty"] as? Bool {
+            // L'API ne dit que « file vide ou non » : ni sa longueur ni l'attente.
             tiles.append(ExtraMetric(id: "bar", symbol: "cup.and.saucer.fill",
-                                     label: "Bar", value: empty ? "Pas d'attente" : "File d'attente"))
+                                     label: "Bar", value: empty ? "Pas d'attente" : "File d'attente",
+                                     note: "Oui / non seulement, sans durée"))
         }
         if let co2 = co2Percent() {
             tiles.append(ExtraMetric(id: "co2", symbol: "leaf.fill",
@@ -392,16 +414,6 @@ final class SNCFDataSource: TrainDataSource {
             tiles.append(ExtraMetric(id: "rame", symbol: "tram", label: "Rame", value: rame))
         }
 
-        // Durées d'arrêt annoncées, gares intermédiaires seulement.
-        let dwells = stops.dropFirst().dropLast().compactMap { stop -> String? in
-            let minutes = APIValue.int(stop["duration"])
-            guard minutes > 0, let label = stop["label"] as? String else { return nil }
-            return "\(shortStationName(label)) \(minutes) min"
-        }
-        if !dwells.isEmpty {
-            tiles.append(ExtraMetric(id: "dwell", symbol: "stopwatch", label: "Durées d'arrêt",
-                                     value: dwells.joined(separator: " · "), wide: true))
-        }
         return tiles
     }
 
@@ -466,4 +478,9 @@ final class SNCFDataSource: TrainDataSource {
         "Strasbourg Ville":                     "Strasbourg",
         "Marne-La-Vallée Chessy":               "Marne La Vallée"
     ]
+}
+
+private extension Int {
+    /// `nil` pour zéro : « pas de durée annoncée ».
+    var nonZero: Int? { self == 0 ? nil : self }
 }

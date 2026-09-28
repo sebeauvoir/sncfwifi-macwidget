@@ -140,6 +140,10 @@ final class MenuBarController: NSObject {
             self?.refresh()
         }
         store.onQuit = { NSApp.terminate(nil) }
+        store.onSelectDeparture = { [weak self] stopId in
+            UserDefaults.standard.set(stopId, forKey: "departureStationId")
+            self?.refresh()
+        }
         store.onSelectArrival = { [weak self] stopId in
             UserDefaults.standard.set(stopId, forKey: "arrivalStationId")
             self?.refresh()
@@ -219,9 +223,49 @@ final class MenuBarController: NSObject {
         let km = sourceRemainingKm.map { max(0, $0 - movedSinceSource / 1000) }
             ?? remainingDistanceKm(viewState)
         viewState.remainingKm = km
-        let changed = km.map(DistanceFormat.km) != remainingKm.map(DistanceFormat.km)
+        var changed = km.map(DistanceFormat.km) != remainingKm.map(DistanceFormat.km)
         remainingKm = km
+
+        // Jauge : part parcourue de MON trajet (gare de départ → gare d'arrivée choisies), et
+        // non du trajet du train. Avant la gare de départ, elle reste à zéro.
+        if let km, let total = journeyKm(viewState), total > 0 {
+            let journey = max(0, min(1, 1 - km / total))
+            if abs(journey - (progress ?? -1)) > 0.002 { changed = true }
+            progress = journey
+        }
         if changed { redrawTitle() }
+    }
+
+    /// Longueur du trajet entre les gares de départ et d'arrivée choisies : distances de l'API
+    /// (SNCF, ICE), sinon le long du tracé publié (Lyria), sinon de gare en gare.
+    private func journeyKm(_ viewState: TrainViewState) -> Double? {
+        let stops = viewState.stops
+        guard let arrival = stops.firstIndex(where: { $0.id == viewState.selectedArrivalId }) else { return nil }
+        let departure = stops.firstIndex(where: { $0.id == viewState.selectedDepartureId }) ?? 0
+        guard departure < arrival else { return nil }
+
+        if let from = stops[departure].distanceFromStartKm, let to = stops[arrival].distanceFromStartKm {
+            return to - from
+        }
+        let located = stops[departure...arrival].compactMap(\.coordinate)
+        guard located.count == arrival - departure + 1 else { return nil }
+        if routePath.count > 1, routeCumulative.count == routePath.count {
+            let start = TrainMapGeometry.nearestIndex(in: routePath, to: located[0])
+            let end = TrainMapGeometry.nearest(in: routePath, to: located[located.count - 1],
+                                               range: start..<routePath.count).index
+            return (routeCumulative[end] - routeCumulative[start]) / 1000
+        }
+        return zip(located, located.dropFirst()).reduce(0) { $0 + Self.distance($1.0, $1.1) } / 1000
+    }
+
+    /// Gare de départ choisie, si elle est bien avant la gare d'arrivée ; sinon l'origine.
+    private func resolveDeparture(_ viewState: inout TrainViewState) {
+        let stops = viewState.stops
+        guard !stops.isEmpty else { return }
+        let arrival = stops.firstIndex { $0.id == viewState.selectedArrivalId } ?? stops.count - 1
+        let saved = UserDefaults.standard.string(forKey: "departureStationId")
+        let index = saved.flatMap { saved in stops.firstIndex { $0.id == saved || $0.label == saved } }
+        viewState.selectedDepartureId = stops[index.map { $0 < arrival ? $0 : 0 } ?? 0].id
     }
 
     /// Distance jusqu'à la gare d'arrivée choisie, faute de valeur fournie par l'API : le long
@@ -527,9 +571,11 @@ final class MenuBarController: NSObject {
             self.notifyPlatformChangeIfNeeded(snapshot: snapshot)
 
             self.speedKmh = snapshot.viewState.speedKmh
+            // Jauge du trajet du train, remplacée par celle de mon trajet dès qu'elle est calculable.
             self.progress = snapshot.badge.progress
 
             var viewState = snapshot.viewState
+            self.resolveDeparture(&viewState)
             self.startTripIfNeeded(viewState, source: source)
             self.recordTrail(viewState.trainCoordinate)
             viewState.trail = self.trail
