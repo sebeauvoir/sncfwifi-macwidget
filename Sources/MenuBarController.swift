@@ -19,6 +19,9 @@ final class MenuBarController: NSObject {
 
     private let store = TrainStore()
     private let popover = NSPopover()
+    /// Vrai pendant l'animation de fermeture du popover : lui changer de taille à ce moment le
+    /// laisse figé à mi-fondu.
+    private var isPopoverClosing = false
     /// Fenêtre d'aperçu agrandi de la carte, gardée pour être rouverte telle quelle.
     private var mapPanel: NSPanel?
     private lazy var panelHost = NSHostingController(rootView: AnyView(TrainPanelView().environmentObject(store)))
@@ -138,6 +141,7 @@ final class MenuBarController: NSObject {
     private func configurePopover() {
         popover.behavior = .transient
         popover.animates = true
+        popover.delegate = self
         popover.contentViewController = panelHost
 
         store.onRefresh = { [weak self] in
@@ -224,9 +228,10 @@ final class MenuBarController: NSObject {
     /// `NSPopover` ne suit pas la taille intrinsèque de sa vue SwiftUI : sans ça, il garde la
     /// hauteur de son premier affichage et rogne le bas du contenu.
     private func sizePopoverToContent() {
+        guard !isPopoverClosing else { return }
         panelHost.view.layoutSubtreeIfNeeded()
         let fitting = panelHost.view.fittingSize
-        guard fitting.width > 0, fitting.height > 0 else { return }
+        guard fitting.width > 0, fitting.height > 0, fitting != popover.contentSize else { return }
         popover.contentSize = fitting
     }
 
@@ -906,6 +911,16 @@ extension MenuBarController: CLLocationManagerDelegate {
         if status == .authorized || status == .authorizedAlways {
             refresh()
         }
+    }
+}
+
+extension MenuBarController: NSPopoverDelegate {
+    func popoverWillClose(_ notification: Notification) {
+        isPopoverClosing = true
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        isPopoverClosing = false
     }
 }
 

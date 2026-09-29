@@ -34,8 +34,8 @@ GPS entre deux lectures ; à défaut, le long du tracé publié (Lyria) ou de ga
 
 **Panneau** — numéro de train, destination, vitesse et kilomètres restants en en-tête ; desserte avec les
 horaires théoriques barrés en cas de retard et les durées d'arrêt, repliée avant ma gare de départ et après ma gare d'arrivée (un clic la déplie) ; une carte du trajet, à la manière de
-`wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares et train en pastilles, position
-relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
+`wifi.sncf/fr/journey` : portion parcourue et reste du trajet, gares en pastilles, train en flèche
+tournée selon son cap, position relue chaque seconde. Un bouton sur la carte alterne deux modes, mémorisés : **trajet**, cadrage
 du train jusqu'à la gare d'arrivée choisie avec zoom automatique (un zoom ou un déplacement à la
 main suspend le suivi une minute) ; **suivi**, train toujours au centre, la carte défile sous lui
 et seul le zoom reste permis. Échelle et mentions légales en pied de carte, comme sur le portail. En bas du panneau, une section
@@ -46,7 +46,8 @@ portions sur LGV sont colorées en ambre, d'après la vitesse maximale des voies
 que portent les tuiles du train : celles de zoom 8 le long de tout le trajet sont lues directement
 dans l'archive, quel que soit l'affichage. Un bouton agrandit la carte dans une fenêtre d'aperçu
 flottante, redimensionnable, fermée par Échap, avec, en surbrillance en haut à gauche, vitesse,
-kilomètres restants, durée jusqu'à la gare d'arrivée, prochaine gare et altitude. En mode suivi, le train reste au centre à chaque image, zoom
+kilomètres restants, durée jusqu'à la gare d'arrivée, durée jusqu'à la prochaine gare et altitude
+(un pictogramme par ligne, le libellé au survol). En mode suivi, le train reste au centre à chaque image, zoom
 compris ; ailleurs, la portion parcourue suit les positions relevées depuis le lancement
 de l'app et le reste relie les gares en ligne droite. Sur le WiFi SNCF, le fond de carte est celui
 du portail, servi par le train (MapLibre, tuiles PMTiles) : **aucune requête vers Internet**. Les

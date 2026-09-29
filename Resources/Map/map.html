@@ -38,6 +38,10 @@
   }
   .badge svg { width: 58%; height: 58%; fill: #fff; }
   .badge:empty { border-width: 1.5px; }
+  /* Train : flèche tournée selon son cap, bordée de blanc. */
+  .train-arrow { width: 22px; height: 22px; z-index: 2; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .45)); }
+  .train-arrow svg { display: block; width: 100%; height: 100%; }
+  .train-arrow path { fill: var(--tint); stroke: #fff; stroke-width: 2; stroke-linejoin: round; }
   /* Flèche par défaut ; la main fermée seulement pendant qu'on fait glisser la carte, et
      jamais en mode suivi, où la carte ne se déplace pas. */
   .maplibregl-canvas-container.maplibregl-interactive { cursor: default; }
@@ -66,10 +70,11 @@
 <script>
 "use strict";
 
-// Pictogrammes des pastilles : bâtiment de gare, face avant d'un train.
+// Pictogramme des gares de départ et d'arrivée ; flèche du train, pointe vers le nord.
 const STATION = '<svg viewBox="0 0 24 24"><path d="M12 2 2 7v2h20V7zM5 11v7h3v-7zm5.5 0v7h3v-7zM16 11v7h3v-7zM2 20v2h20v-2z"/></svg>';
-const TRAIN = '<svg viewBox="0 0 24 24"><path d="M12 2C8 2 4 2.5 4 6v9.5A3.5 3.5 0 0 0 7.5 19L6 20.5v.5h2.2l2-2h3.6l2 2H18v-.5L16.5 19a3.5 3.5 0 0 0 3.5-3.5V6c0-3.5-4-4-8-4zM7.5 17a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3.5-7H6V6h5zm2 0V6h5v4zm3.5 7a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>';
+const ARROW = '<svg viewBox="0 0 24 24"><path d="M12 2.5 19.5 20 12 16 4.5 20Z"/></svg>';
 const PASSED = "#8e8e93";
+const DARK = window.matchMedia("(prefers-color-scheme: dark)").matches;
 // Un zoom ou un déplacement à la main suspend le suivi une minute.
 const USER_PAUSE_MS = 60000;
 
@@ -85,6 +90,8 @@ let travelledBase = [];
 let remainingBase = [];
 let train = null;
 let trainMarker = null;
+// Tronçons qui relient le train aux deux tracés : sur LGV ou non, jugés à chaque position.
+const headLgv = { travelled: false, remaining: false };
 let stopMarkers = [];
 let stopsKey = "";
 let framed = null;
@@ -99,8 +106,7 @@ try { followZoom = Number(localStorage.getItem("followZoom")) || followZoom; } c
 // Le style du portail vise « http://localhost:8000 » : le portail réécrit ces adresses vers
 // sa propre origine, on fait de même.
 async function loadStyle() {
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const names = dark ? ["style-dark", "style-light"] : ["style-light"];
+  const names = DARK ? ["style-dark", "style-light"] : ["style-light"];
   for (const name of names) {
     try {
       const response = await fetch(`/karto/${name}.json`, { cache: "no-cache" });
@@ -114,7 +120,7 @@ async function loadStyle() {
   return {
     version: 8, sources: {},
     layers: [{ id: "background", type: "background",
-               paint: { "background-color": dark ? "#2c2c2e" : "#e9eef2" } }],
+               paint: { "background-color": DARK ? "#2c2c2e" : "#e9eef2" } }],
   };
 }
 
@@ -161,27 +167,15 @@ async function start() {
   map.on("error", (event) => post({ type: "error", message: String(event.error && event.error.message) }));
 
   map.on("load", () => {
-    for (const id of ["remaining", "travelled"]) {
+    // De bas en haut : reste du trajet, puis parcouru ; chacun avec son raccord au train et
+    // ses portions sur LGV par-dessus. Les tracés entiers ne changent qu'avec le tracé ; seuls
+    // les raccords suivent le train.
+    for (const id of ["remaining", "remaining-head", "lgv-remaining",
+                      "travelled", "travelled-head", "lgv-travelled"]) {
       map.addSource(id, { type: "geojson", data: line([]) });
-      map.addLayer({
-        id, type: "line", source: id,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: { "line-color": tint, "line-width": 4, "line-opacity": id === "travelled" ? 1 : 0.4 },
-      });
+      map.addLayer({ id, type: "line", source: id, layout: { "line-cap": "round", "line-join": "round" } });
     }
-    // Portions sur LGV, par-dessus chacun des deux tracés.
-    map.addSource("lgv-remaining", { type: "geojson", data: multiline([]) });
-    map.addLayer({
-      id: "lgv-remaining", type: "line", source: "lgv-remaining",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": LGV_COLOR, "line-width": 5, "line-opacity": 0.75 },
-    }, "travelled");
-    map.addSource("lgv-travelled", { type: "geojson", data: multiline([]) });
-    map.addLayer({
-      id: "lgv-travelled", type: "line", source: "lgv-travelled",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": LGV_COLOR, "line-width": 5 },
-    });
+    paintLines();
     // Chaque tuile des voies ferrées chargée peut révéler de nouvelles LGV.
     map.on("sourcedata", (event) => {
       if (event.sourceId === "railways" && event.tile) scheduleLgvScan();
@@ -195,6 +189,33 @@ async function start() {
 
 function line(coordinates) {
   return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } };
+}
+
+// Couleur éclaircie mais opaque pour le reste du trajet : un trait semi-transparent laisse
+// voir la voie ferrée du fond de carte, d'où des nuances changeantes le long du tracé.
+function pale(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const base = DARK ? [72, 72, 74] : [255, 255, 255];
+  return "#" + [n >> 16, n >> 8, n].map((value, i) => {
+    const channel = value & 255;
+    return Math.round(channel + (base[i] - channel) * 0.5).toString(16).padStart(2, "0");
+  }).join("");
+}
+
+function paintLines() {
+  const colors = {
+    travelled: tint, remaining: pale(tint),
+    "lgv-travelled": LGV_COLOR, "lgv-remaining": pale(LGV_COLOR),
+  };
+  for (const id of ["travelled", "remaining"]) {
+    const lgv = `lgv-${id}`;
+    map.setPaintProperty(id, "line-color", colors[id]);
+    map.setPaintProperty(lgv, "line-color", colors[lgv]);
+    map.setPaintProperty(lgv, "line-width", 5);
+    map.setPaintProperty(id, "line-width", 4);
+    map.setPaintProperty(`${id}-head`, "line-color", ["case", ["get", "lgv"], colors[lgv], colors[id]]);
+    map.setPaintProperty(`${id}-head`, "line-width", ["case", ["get", "lgv"], 5, 4]);
+  }
 }
 
 function multiline(runs) {
@@ -471,8 +492,10 @@ function nearLgv(point) {
 }
 
 // Un tronçon est sur LGV si au moins 60 % des points répartis le long de lui le sont : un
-// tronçon long ne se juge plus sur ses deux seules extrémités.
-function segmentOnLgv(a, b) {
+// tronçon long ne se juge plus sur ses deux seules extrémités. Seuls les tronçons du tracé
+// sont retenus ; le raccord au train, qui change chaque seconde, ne l'est pas.
+function segmentOnLgv(a, b, remember = true) {
+  if (lgvGrid.size === 0) return false;
   const key = `${a[0]},${a[1]}|${b[0]},${b[1]}`;
   if (lgvSegments.has(key)) return lgvSegments.get(key);
   const kx = 111320 * Math.cos(a[1] * Math.PI / 180), ky = 110540;
@@ -484,9 +507,7 @@ function segmentOnLgv(a, b) {
     if (nearLgv([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])) hits++;
   }
   const onLgv = hits / samples >= 0.6;
-  // Le tronçon qui touche le train change chaque seconde : le cache ne grossit pas sans fin.
-  if (lgvSegments.size > 20000) lgvSegments.clear();
-  lgvSegments.set(key, onLgv);
+  if (remember) lgvSegments.set(key, onLgv);
   return onLgv;
 }
 
@@ -505,16 +526,41 @@ function lgvRuns(coordinates) {
   return runs;
 }
 
-// Tracés prolongés jusqu'au train : le tronçon qui le touche est jugé comme les autres.
+// Portions des tracés sur LGV : recalculées quand le tracé change ou que de nouvelles LGV
+// sont connues, pas à chaque position du train.
 function drawLgv() {
-  if (!loaded || lgvGrid.size === 0) return;
-  const head = train ? [train] : [];
-  const travelled = lgvRuns(travelledBase.concat(head));
-  const remaining = lgvRuns(head.concat(remainingBase));
+  if (!loaded) return;
+  const travelled = lgvRuns(travelledBase);
+  const remaining = lgvRuns(remainingBase);
   map.getSource("lgv-travelled").setData(multiline(travelled));
   map.getSource("lgv-remaining").setData(multiline(remaining));
   document.getElementById("lgv-legend").style.display =
     travelled.length || remaining.length ? "block" : "none";
+  judgeHeads();
+}
+
+function last(points) {
+  return points.length ? points[points.length - 1] : null;
+}
+
+// Raccords au train jugés sur sa position réelle, une fois par seconde.
+function judgeHeads() {
+  const end = last(travelledBase), start = remainingBase[0];
+  headLgv.travelled = Boolean(train && end && segmentOnLgv(end, train, false));
+  headLgv.remaining = Boolean(train && start && segmentOnLgv(train, start, false));
+}
+
+function segment(a, b, lgv) {
+  const feature = line(a && b ? [a, b] : []);
+  feature.properties.lgv = lgv;
+  return feature;
+}
+
+// Raccords dessinés jusqu'au train tel qu'affiché : le tracé suit la flèche qui glisse.
+function drawHeads() {
+  if (!loaded) return;
+  map.getSource("travelled-head").setData(segment(last(travelledBase), shown, headLgv.travelled));
+  map.getSource("remaining-head").setData(segment(shown, remainingBase[0], headLgv.remaining));
 }
 
 function badge(svg, size, color, title) {
@@ -528,25 +574,27 @@ function badge(svg, size, color, title) {
 }
 
 // Appelée par Swift à chaque rafraîchissement. Les tracés ne sont envoyés que s'ils changent ;
-// le train, lui, arrive chaque seconde et prolonge les deux tracés.
+// le train et son cap, eux, arrivent chaque seconde.
 window.update = function (payload) {
   if (!loaded) { pending = Object.assign(pending || {}, payload); return; }
 
   if (payload.tint && payload.tint !== tint) {
     tint = payload.tint;
-    for (const id of ["remaining", "travelled"]) map.setPaintProperty(id, "line-color", tint);
+    paintLines();
     stopsKey = "";
-    if (trainMarker) { trainMarker.remove(); trainMarker = null; }
+    if (trainMarker) trainMarker.getElement().style.setProperty("--tint", tint);
   }
-  if (payload.travelled) travelledBase = payload.travelled;
-  if (payload.remaining) remainingBase = payload.remaining;
   train = payload.train || null;
-
-  const head = train ? [train] : [];
-  map.getSource("travelled").setData(line(travelledBase.concat(head)));
-  map.getSource("remaining").setData(line(head.concat(remainingBase)));
-  if (payload.travelled || payload.remaining) loadLgvAlongRoute();
-  drawLgv();
+  if (payload.travelled || payload.remaining) {
+    if (payload.travelled) travelledBase = payload.travelled;
+    if (payload.remaining) remainingBase = payload.remaining;
+    map.getSource("travelled").setData(line(travelledBase));
+    map.getSource("remaining").setData(line(remainingBase));
+    loadLgvAlongRoute();
+    drawLgv();
+  } else {
+    judgeHeads();
+  }
 
   if (payload.stopsKey !== undefined && payload.stopsKey !== stopsKey) {
     stopsKey = payload.stopsKey;
@@ -563,15 +611,19 @@ window.update = function (payload) {
 
   if (train) {
     if (!trainMarker) {
-      const element = badge(TRAIN, 30, tint);
-      element.style.zIndex = "2";
-      trainMarker = new maplibregl.Marker({ element }).setLngLat(train).addTo(map);
+      const element = document.createElement("div");
+      element.className = "train-arrow";
+      element.innerHTML = ARROW;
+      element.style.setProperty("--tint", tint);
+      trainMarker = new maplibregl.Marker({ element, rotationAlignment: "map" }).setLngLat(train).addTo(map);
     }
-    glideTo(train);
-  } else if (trainMarker) {
-    trainMarker.remove();
+    glideTo(train, typeof payload.heading === "number" ? payload.heading : null);
+  } else {
+    if (trainMarker) trainMarker.remove();
     trainMarker = null;
     shown = null;
+    heading = null;
+    drawHeads();
   }
 
   if (payload.mode) applyMode(payload.mode);
@@ -619,20 +671,33 @@ function center() {
 }
 
 // — Glissement du train —
-// Entre deux positions (une par seconde), le train glisse image par image. En suivi, la
-// caméra le suit à chaque image : plus d'animation qu'un coup de molette interromprait.
+// Entre deux positions (une par seconde), le train glisse et tourne image par image. En
+// suivi, la caméra le suit à chaque image : plus d'animation qu'un coup de molette
+// interromprait.
 let shown = null;
+let heading = null;
 let glideFrom = null;
 let glideTarget = null;
+let headingFrom = null;
+let headingTarget = null;
 let glideStart = 0;
 let glideFrame = 0;
+let headsDrawnAt = 0;
 
-function glideTo(next) {
+function glideTo(next, nextHeading) {
+  if (nextHeading !== null) {
+    // Rotation par le plus court chemin : de 350° à 10°, 20° dans le sens horaire.
+    headingFrom = heading === null ? nextHeading : heading;
+    headingTarget = headingFrom + ((nextHeading - headingFrom + 540) % 360 - 180);
+  } else {
+    headingFrom = headingTarget = heading;
+  }
   const far = shown && Math.abs(next[0] - shown[0]) + Math.abs(next[1] - shown[1]) > 0.05;
   if (!shown || far) {
     // Premier point, ou saut de plusieurs kilomètres : pas de glissement.
     shown = next;
-    showTrain();
+    heading = headingTarget;
+    showTrain(true);
     return;
   }
   glideFrom = shown;
@@ -645,13 +710,22 @@ function glide(now) {
   const t = Math.min(1, (now - glideStart) / 1000);
   shown = [glideFrom[0] + (glideTarget[0] - glideFrom[0]) * t,
            glideFrom[1] + (glideTarget[1] - glideFrom[1]) * t];
-  showTrain();
+  if (headingTarget !== null) heading = headingFrom + (headingTarget - headingFrom) * t;
+  showTrain(t === 1);
   glideFrame = t < 1 ? requestAnimationFrame(glide) : 0;
 }
 
-function showTrain() {
-  if (trainMarker) trainMarker.setLngLat(shown);
+// Flèche à chaque image ; raccords des tracés dix fois par seconde, c'est assez fluide.
+function showTrain(final) {
+  if (!trainMarker) return;
+  trainMarker.setLngLat(shown);
+  if (heading !== null) trainMarker.setRotation(heading);
   if (mode === "follow" && followPlaced) map.jumpTo({ center: shown });
+  const now = performance.now();
+  if (final || now - headsDrawnAt > 100) {
+    headsDrawnAt = now;
+    drawHeads();
+  }
 }
 
 // Cadre train → gare d'arrivée, sauf pendant la pause qui suit un geste. Un écart de moins de

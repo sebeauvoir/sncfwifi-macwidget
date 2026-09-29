@@ -4,8 +4,9 @@ import SwiftUI
 import WebKit
 
 /// Carte du trajet, à la manière de `wifi.sncf/fr/journey` : portion parcourue en trait
-/// plein, reste du trajet en trait clair, gares et train en pastilles à pictogramme. Le cadrage
-/// suit le train : il tient à un bout le train, à l'autre la gare d'arrivée choisie.
+/// plein, reste du trajet en trait clair, gares en pastilles, train en flèche tournée selon
+/// son cap. Le cadrage suit le train : il tient à un bout le train, à l'autre la gare
+/// d'arrivée choisie.
 ///
 /// Deux rendus pour une même géométrie :
 /// - les tuiles du serveur embarqué, par MapLibre (`LocalTileMapView`), quand le réseau en a
@@ -128,6 +129,8 @@ struct TrainMapGeometry {
         let stopsKey: String
         /// Cadre train → gare d'arrivée, ou ~50 km autour du train, ou tout le trajet.
         let frame: MKMapRect?
+        /// Cap du train, en degrés depuis le nord.
+        let heading: Double?
     }
 
     /// Dernier point du tracé atteint par le train. Le tracé peut repasser près de lui-même
@@ -197,7 +200,30 @@ struct TrainMapGeometry {
                       remaining: remaining,
                       linesKey: linesKey,
                       stopsKey: stopsKey,
-                      frame: Self.frame(framePoints))
+                      frame: Self.frame(framePoints),
+                      heading: train.flatMap { Self.heading(at: $0, ahead: remaining, behind: travelled) })
+    }
+
+    /// Cap vers le premier point du tracé à plus de 50 m devant le train : le tracé suit la
+    /// voie, là où une position GPS tremble, et reste juste à l'arrêt. En bout de tracé, cap
+    /// depuis le dernier point à plus de 50 m derrière.
+    static func heading(at train: CLLocationCoordinate2D,
+                        ahead: [CLLocationCoordinate2D],
+                        behind: [CLLocationCoordinate2D]) -> Double? {
+        let origin = MKMapPoint(train)
+        let isFar = { (point: CLLocationCoordinate2D) in origin.distance(to: MKMapPoint(point)) > 50 }
+        if let next = ahead.first(where: isFar) { return bearing(from: train, to: next) }
+        if let previous = behind.last(where: isFar) { return bearing(from: previous, to: train) }
+        return nil
+    }
+
+    /// Relèvement initial de `a` vers `b`, de 0 (nord) à 360 dans le sens horaire.
+    static func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        let lat1 = a.latitude * .pi / 180, lat2 = b.latitude * .pi / 180
+        let deltaLon = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(deltaLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLon)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
     }
 
     /// Rectangle englobant, jamais plus serré que ~4 km (à l'approche de la gare), ni que
@@ -327,6 +353,7 @@ struct LocalTileMapView: NSViewRepresentable {
                 "mode": input.follow ? "follow" : "overview",
                 "tint": input.tintCSS,
                 "train": input.train.map { [$0.longitude, $0.latitude] as Any } ?? NSNull(),
+                "heading": output.heading ?? NSNull(),
             ]
             if output.linesKey != sentLinesKey {
                 sentLinesKey = output.linesKey
@@ -460,6 +487,8 @@ struct AppleMapView: NSViewRepresentable {
         private var stopAnnotations: [StopAnnotation] = []
         private let trainAnnotation = MKPointAnnotation()
         private var hasTrain = false
+        /// Cap dessiné sur la flèche du train.
+        private var heading: Double = 0
 
         /// Cadre appliqué en dernier, pour ne recadrer que quand le train a assez avancé.
         private var framedRect: MKMapRect?
@@ -493,7 +522,7 @@ struct AppleMapView: NSViewRepresentable {
             remainingLine = replace(remainingLine, with: head + output.remaining, travelled: false, on: map)
             travelledLine = replace(travelledLine, with: output.travelled + head, travelled: true, on: map)
 
-            updateTrain(map, train: input.train)
+            updateTrain(map, train: input.train, heading: output.heading)
             if isFollowing {
                 center(map, on: input.train)
             } else if let frame = output.frame {
@@ -549,11 +578,16 @@ struct AppleMapView: NSViewRepresentable {
             return line
         }
 
-        private func updateTrain(_ map: MKMapView, train: CLLocationCoordinate2D?) {
+        private func updateTrain(_ map: MKMapView, train: CLLocationCoordinate2D?, heading: Double?) {
             guard let train else {
                 if hasTrain { map.removeAnnotation(trainAnnotation) }
                 hasTrain = false
                 return
+            }
+            // La flèche n'est redessinée que si le cap a tourné de quelques degrés.
+            if let heading, abs(heading - self.heading) > 2 {
+                self.heading = heading
+                map.view(for: trainAnnotation)?.image = Self.arrow(heading: heading, fill: tint)
             }
             trainAnnotation.coordinate = train
             if !hasTrain {
@@ -618,7 +652,7 @@ struct AppleMapView: NSViewRepresentable {
             renderer.lineWidth = 4
             renderer.lineCap = .round
             renderer.lineJoin = .round
-            renderer.strokeColor = line.title == Self.travelledTitle ? tint : tint.withAlphaComponent(0.4)
+            renderer.strokeColor = line.title == Self.travelledTitle ? tint : Self.pale(tint)
             return renderer
         }
 
@@ -641,13 +675,52 @@ struct AppleMapView: NSViewRepresentable {
                 let view = mapView.dequeueReusableAnnotationView(withIdentifier: "train")
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "train")
                 view.annotation = annotation
-                view.image = Self.badge(symbol: "tram.fill", diameter: 30, fill: tint)
+                view.image = Self.arrow(heading: heading, fill: tint)
                 view.displayPriority = .required
                 view.layer?.zPosition = 1
                 view.canShowCallout = false
                 return view
             }
             return nil
+        }
+
+        /// Couleur éclaircie mais opaque du reste du trajet : un trait semi-transparent laisse
+        /// voir les voies du fond de carte, d'où des nuances changeantes le long du tracé.
+        private static func pale(_ color: NSColor) -> NSColor {
+            NSColor(name: nil) { appearance in
+                let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return color.blended(withFraction: 0.5, of: dark ? NSColor(white: 0.28, alpha: 1) : .white) ?? color
+            }
+        }
+
+        /// Flèche du train, pointe tournée vers `heading` (degrés depuis le nord), bordée de
+        /// blanc, comme sur la carte hors ligne.
+        private static func arrow(heading: Double, fill: NSColor) -> NSImage {
+            let side: CGFloat = 22
+            return NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+                let angle = heading * .pi / 180
+                // Pointe vers le haut, puis rotation horaire autour du centre.
+                let outline: [(CGFloat, CGFloat)] = [(0, 9.5), (7.5, -8), (0, -4), (-7.5, -8)]
+                let path = NSBezierPath()
+                for (index, (x, y)) in outline.enumerated() {
+                    let point = NSPoint(x: side / 2 + x * CGFloat(cos(angle)) + y * CGFloat(sin(angle)),
+                                        y: side / 2 - x * CGFloat(sin(angle)) + y * CGFloat(cos(angle)))
+                    if index == 0 { path.move(to: point) } else { path.line(to: point) }
+                }
+                path.close()
+                path.lineJoinStyle = .round
+                path.lineWidth = 2
+                let shadow = NSShadow()
+                shadow.shadowColor = NSColor.black.withAlphaComponent(0.45)
+                shadow.shadowOffset = NSSize(width: 0, height: -1)
+                shadow.shadowBlurRadius = 1.5
+                shadow.set()
+                fill.setFill()
+                path.fill()
+                NSColor.white.setStroke()
+                path.stroke()
+                return true
+            }
         }
 
         /// Pastille ronde cerclée de blanc, pictogramme blanc au centre. Les couleurs
