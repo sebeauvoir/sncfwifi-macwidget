@@ -3,9 +3,8 @@ import MapKit
 import SwiftUI
 import WebKit
 
-/// Carte du trajet, à la manière de `wifi.sncf/fr/journey` : portion parcourue en trait
-/// plein, reste du trajet en trait clair, gares en pastilles, train en flèche tournée selon
-/// son cap. Le cadrage suit le train : il tient à un bout le train, à l'autre la gare
+/// Carte du trajet, à la manière de `wifi.sncf/fr/journey` : tracé d'une seule couleur,
+/// gares en pastilles (grises une fois passées), train en flèche tournée selon son cap. Le cadrage suit le train : il tient à un bout le train, à l'autre la gare
 /// d'arrivée choisie.
 ///
 /// Deux rendus pour une même géométrie :
@@ -150,6 +149,7 @@ struct TrainMapGeometry {
         var remaining: [CLLocationCoordinate2D]
         var framePoints = [train].compactMap { $0 }
         let linesKey: String
+        let heading: Double?
 
         let path = input.routePath
         if path.count > 1 {
@@ -170,6 +170,7 @@ struct TrainMapGeometry {
                 framePoints.append(arrival)
             }
             linesKey = "path:\(path.count):\(cut)"
+            heading = train.flatMap { Self.pathHeading(path, cut: cut, train: $0) }
         } else {
             // Sans tracé publié : gares reliées en ligne droite, et positions relevées pour la
             // portion parcourue depuis le lancement de l'app.
@@ -188,6 +189,7 @@ struct TrainMapGeometry {
                 framePoints.append(arrival)
             }
             linesKey = "stops:\(stopsKey):\(input.trail.count)"
+            heading = train.flatMap { Self.heading(at: $0, ahead: remaining, behind: travelled) }
         }
 
         // Ni train ni gare d'arrivée : tout le trajet.
@@ -201,12 +203,33 @@ struct TrainMapGeometry {
                       linesKey: linesKey,
                       stopsKey: stopsKey,
                       frame: Self.frame(framePoints),
-                      heading: train.flatMap { Self.heading(at: $0, ahead: remaining, behind: travelled) })
+                      heading: heading)
     }
 
-    /// Cap vers le premier point du tracé à plus de 50 m devant le train : le tracé suit la
-    /// voie, là où une position GPS tremble, et reste juste à l'arrêt. En bout de tracé, cap
-    /// depuis le dernier point à plus de 50 m derrière.
+    /// Cap du train sur un tracé publié : sens du tronçon sur lequel il se trouve, l'un des
+    /// deux qui encadrent le point atteint. Le tracé suit la voie, là où une position GPS
+    /// tremble, et reste juste à l'arrêt. Viser le point suivant ne suffit pas : sur une LGV,
+    /// les points sont espacés de plusieurs kilomètres et le plus proche est souvent derrière
+    /// le train.
+    static func pathHeading(_ path: [CLLocationCoordinate2D], cut: Int, train: CLLocationCoordinate2D) -> Double? {
+        let here = MKMapPoint(train)
+        let segments = [cut - 1, cut].filter { $0 >= 0 && $0 + 1 < path.count }
+            .filter { MKMapPoint(path[$0]).distance(to: MKMapPoint(path[$0 + 1])) > 1 }
+        guard let start = segments.min(by: {
+            distance(here, toSegment: MKMapPoint(path[$0]), MKMapPoint(path[$0 + 1]))
+                < distance(here, toSegment: MKMapPoint(path[$1]), MKMapPoint(path[$1 + 1]))
+        }) else { return nil }
+        return bearing(from: path[start], to: path[start + 1])
+    }
+
+    private static func distance(_ p: MKMapPoint, toSegment a: MKMapPoint, _ b: MKMapPoint) -> Double {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    /// Sans tracé publié : cap vers la première gare à plus de 50 m devant le train, ou depuis
+    /// le dernier point à plus de 50 m derrière en bout de trajet.
     static func heading(at train: CLLocationCoordinate2D,
                         ahead: [CLLocationCoordinate2D],
                         behind: [CLLocationCoordinate2D]) -> Double? {
@@ -477,8 +500,6 @@ struct AppleMapView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
-        private static let travelledTitle = "parcouru"
-
         private var geometry = TrainMapGeometry()
         private var tint: NSColor = .controlAccentColor
         private var stopsKey = ""
@@ -519,8 +540,8 @@ struct AppleMapView: NSViewRepresentable {
 
             let head = [input.train].compactMap { $0 }
             // Dans cet ordre : le parcouru, ajouté en dernier, passe au-dessus du restant.
-            remainingLine = replace(remainingLine, with: head + output.remaining, travelled: false, on: map)
-            travelledLine = replace(travelledLine, with: output.travelled + head, travelled: true, on: map)
+            remainingLine = replace(remainingLine, with: head + output.remaining, on: map)
+            travelledLine = replace(travelledLine, with: output.travelled + head, on: map)
 
             updateTrain(map, train: input.train, heading: output.heading)
             if isFollowing {
@@ -563,14 +584,11 @@ struct AppleMapView: NSViewRepresentable {
         /// Ajoute le nouveau tracé puis retire l'ancien : pas de clignotement entre les deux.
         private func replace(_ old: MKPolyline?,
                              with coordinates: [CLLocationCoordinate2D],
-                             travelled: Bool,
                              on map: MKMapView) -> MKPolyline? {
             var line: MKPolyline?
             if coordinates.count > 1 {
                 var points = coordinates
                 let new = MKPolyline(coordinates: &points, count: points.count)
-                // Le titre dit au rendu quelle couleur employer.
-                new.title = travelled ? Self.travelledTitle : nil
                 map.addOverlay(new, level: .aboveRoads)
                 line = new
             }
@@ -652,7 +670,7 @@ struct AppleMapView: NSViewRepresentable {
             renderer.lineWidth = 4
             renderer.lineCap = .round
             renderer.lineJoin = .round
-            renderer.strokeColor = line.title == Self.travelledTitle ? tint : Self.pale(tint)
+            renderer.strokeColor = tint
             return renderer
         }
 
@@ -682,15 +700,6 @@ struct AppleMapView: NSViewRepresentable {
                 return view
             }
             return nil
-        }
-
-        /// Couleur éclaircie mais opaque du reste du trajet : un trait semi-transparent laisse
-        /// voir les voies du fond de carte, d'où des nuances changeantes le long du tracé.
-        private static func pale(_ color: NSColor) -> NSColor {
-            NSColor(name: nil) { appearance in
-                let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                return color.blended(withFraction: 0.5, of: dark ? NSColor(white: 0.28, alpha: 1) : .white) ?? color
-            }
         }
 
         /// Flèche du train, pointe tournée vers `heading` (degrés depuis le nord), bordée de
