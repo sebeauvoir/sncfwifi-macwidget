@@ -351,10 +351,10 @@ struct MapPreviewView: View {
                 GeometryReader { geometry in
                     ZStack(alignment: .topLeading) {
                         TrainMapView(input: state.mapInput, localTiles: state.mapTiles, cornerRadius: 0)
-                        // La carte d'infos suit la taille de la fenêtre : pleine taille dès
-                        // ~900 pt de large, jusqu'à 72 % dans une petite fenêtre.
+                        // La carte d'infos garde sa taille dans une petite fenêtre et grandit
+                        // un peu avec une grande (jusqu'à 130 % à ~1 200 pt de large).
                         PreviewReadouts(state: state)
-                            .scaleEffect(min(1, max(0.72, geometry.size.width / 900)), anchor: .topLeading)
+                            .scaleEffect(min(1.3, max(1, geometry.size.width / 900)), anchor: .topLeading)
                             .padding(10)
                     }
                 }
@@ -421,35 +421,35 @@ private struct PreviewReadouts: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(readouts) { readout in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Image(systemName: readout.symbol)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(state.provider.accent)
-                        .frame(width: 16)
+                        .frame(width: 20)
                     Text(readout.value)
                         // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
-                        .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .semibold)))
+                        .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 17, weight: .semibold)))
                         .fixedSize()
                         .background(GeometryReader {
                             Color.clear.preference(key: ValueWidthKey.self, value: $0.size.width)
                         })
                         .frame(minWidth: valueWidth, alignment: .trailing)
                     Text(readout.unit)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.secondary)
-                        .frame(width: 26, alignment: .leading)
+                        .frame(width: 32, alignment: .leading)
                 }
                 .help(readout.help)
             }
         }
         .onPreferenceChange(ValueWidthKey.self) { valueWidth = $0 }
         .fixedSize()
-        .padding(.leading, 9)
-        .padding(.trailing, 6)
-        .padding(.vertical, 8)
-        .modifier(LiquidGlass(cornerRadius: 12))
+        .padding(.leading, 11)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .modifier(LiquidGlass(cornerRadius: 14))
         .onReceive(clock) { now = $0 }
     }
 
