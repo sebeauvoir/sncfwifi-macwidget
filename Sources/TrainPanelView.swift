@@ -368,87 +368,104 @@ struct MapPreviewView: View {
     }
 }
 
-/// Carte d'infos de l'aperçu, en verre en haut à gauche, une info par ligne : vitesse,
-/// kilomètres restants, durée jusqu'à ma gare d'arrivée, prochaine gare et durée pour
-/// l'atteindre, altitude. Les durées sont recalculées chaque seconde.
+/// Carte d'infos de l'aperçu, en verre en haut à gauche, une info par ligne, sans libellé :
+/// le pictogramme suffit, le libellé s'affiche au survol. Vitesse, kilomètres restants, durée
+/// jusqu'à ma gare d'arrivée, durée jusqu'à la prochaine gare, altitude. Trois colonnes :
+/// pictogrammes, valeurs alignées à droite, unités alignées à gauche. Les durées sont
+/// recalculées chaque seconde.
 private struct PreviewReadouts: View {
     let state: TrainViewState
     @State private var now = Date()
+    /// Largeur de la plus longue valeur, mesurée : la colonne des valeurs s'y ajuste.
+    @State private var valueWidth: CGFloat = 0
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    /// Colonne des unités, de largeur fixe (celle de « km/h ») : tous les chiffres finissent
-    /// sur le même bord, qu'il y ait une unité ou non.
-    private let unitWidth: CGFloat = 24
-
-    private var arrival: StopRow? {
-        state.stops.first { $0.id == state.selectedArrivalId }
+    private struct Readout: Identifiable {
+        let id: String
+        let symbol: String
+        let help: String
+        let value: String
+        let unit: String
     }
 
-    /// Prochaine gare : celle que la desserte marque « en cours » (à quai, ou la suivante).
-    private var nextStop: StopRow? {
-        state.stops.first { $0.status == .current }
+    private var readouts: [Readout] {
+        var rows = [Readout(id: "speed", symbol: "speedometer", help: "Vitesse",
+                            value: "\(state.speedKmh)", unit: "km/h")]
+        if let km = state.remainingKm {
+            rows.append(Readout(id: "km", symbol: "arrow.left.and.right", help: "Kilomètres restants",
+                                value: DistanceFormat.km(km), unit: "km"))
+        }
+        let arrival = state.stops.first { $0.id == state.selectedArrivalId }
+        if let arrival, let date = arrival.arrivalDate, date > now {
+            let left = Self.duration(date.timeIntervalSince(now))
+            rows.append(Readout(id: "arrival", symbol: "flag.fill", help: "Arrivée à \(arrival.label)",
+                                value: left.value, unit: left.unit))
+        }
+        // Prochaine gare : celle que la desserte marque « en cours » (à quai, ou la suivante).
+        if let next = state.stops.first(where: { $0.status == .current }), next.id != arrival?.id {
+            let help = "Prochaine gare : \(next.label)"
+            if let date = next.arrivalDate, date > now {
+                let left = Self.duration(date.timeIntervalSince(now))
+                rows.append(Readout(id: "next", symbol: "building.columns.fill", help: help,
+                                    value: left.value, unit: left.unit))
+            } else {
+                rows.append(Readout(id: "next", symbol: "building.columns.fill", help: help,
+                                    value: "À quai", unit: ""))
+            }
+        }
+        if let altitude = state.altitudeM {
+            rows.append(Readout(id: "altitude", symbol: "mountain.2.fill", help: "Altitude",
+                                value: "\(Int(altitude.rounded()))", unit: "m"))
+        }
+        return rows
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            row(symbol: "speedometer", label: "Vitesse", value: "\(state.speedKmh)", unit: "km/h")
-            if let km = state.remainingKm {
-                row(symbol: "mappin.and.ellipse", label: "Restants", value: DistanceFormat.km(km), unit: "km")
-            }
-            if let arrival, let date = arrival.arrivalDate, date > now {
-                let left = Self.duration(date.timeIntervalSince(now))
-                row(symbol: "flag", label: "Arrivée à \(arrival.label)", value: left.value, unit: left.unit)
-            }
-            if let next = nextStop, next.id != arrival?.id {
-                if let date = next.arrivalDate, date > now {
-                    let left = Self.duration(date.timeIntervalSince(now))
-                    row(symbol: "clock", label: "Prochaine gare · \(next.label)", value: left.value, unit: left.unit)
-                } else {
-                    row(symbol: "clock", label: "Prochaine gare · \(next.label)", value: "À quai")
+            ForEach(readouts) { readout in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: readout.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(state.provider.accent)
+                        .frame(width: 16)
+                    Text(readout.value)
+                        // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
+                        .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .semibold)))
+                        .fixedSize()
+                        .background(GeometryReader {
+                            Color.clear.preference(key: ValueWidthKey.self, value: $0.size.width)
+                        })
+                        .frame(minWidth: valueWidth, alignment: .trailing)
+                    Text(readout.unit)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 26, alignment: .leading)
                 }
-            }
-            if let altitude = state.altitudeM {
-                row(symbol: "mountain.2", label: "Altitude", value: "\(Int(altitude.rounded()))", unit: "m")
+                .help(readout.help)
             }
         }
-        // Largeur de la ligne la plus longue : les valeurs s'alignent à droite.
+        .onPreferenceChange(ValueWidthKey.self) { valueWidth = $0 }
         .fixedSize()
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
+        .padding(.leading, 9)
+        .padding(.trailing, 6)
+        .padding(.vertical, 8)
         .modifier(LiquidGlass(cornerRadius: 12))
         .onReceive(clock) { now = $0 }
     }
 
-    /// Une info par ligne : pictogramme et libellé à gauche, valeur alignée à droite, unité
-    /// dans sa colonne.
-    private func row(symbol: String, label: String, value: String, unit: String? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(state.provider.accent)
-                .frame(width: 14)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 170, alignment: .leading)
-            Spacer(minLength: 12)
-            Text(value)
-                // Chiffres à chasse fixe (Font.monospacedDigit n'existe qu'à partir de macOS 12).
-                .font(Font(NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)))
-            Text(unit ?? "")
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundColor(.secondary)
-                .frame(width: unitWidth, alignment: .leading)
-        }
-    }
-
-    /// « 47 » + « min », ou « 1h02 » sans unité.
-    private static func duration(_ seconds: TimeInterval) -> (value: String, unit: String?) {
+    /// « 47 » + « min », ou « 2 » + « h36 » : l'unité reste dans sa colonne.
+    private static func duration(_ seconds: TimeInterval) -> (value: String, unit: String) {
         let minutes = Int(seconds / 60)
         guard minutes >= 60 else { return ("\(max(1, minutes))", "min") }
-        return ("\(minutes / 60)h" + String(format: "%02d", minutes % 60), nil)
+        return ("\(minutes / 60)", "h" + String(format: "%02d", minutes % 60))
+    }
+}
+
+/// Plus grande largeur des valeurs de la carte d'infos.
+private struct ValueWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
