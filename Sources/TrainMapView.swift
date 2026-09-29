@@ -128,6 +128,8 @@ struct TrainMapGeometry {
         let stopsKey: String
         /// Cadre train → gare d'arrivée, ou ~50 km autour du train, ou tout le trajet.
         let frame: MKMapRect?
+        /// Position où dessiner le train : calée sur le tracé quand il y en a un.
+        let train: CLLocationCoordinate2D?
         /// Cap du train, en degrés depuis le nord.
         let heading: Double?
     }
@@ -141,7 +143,7 @@ struct TrainMapGeometry {
         let located = input.stops.filter { $0.coordinate != nil }
         let arrivalIndex = located.firstIndex { $0.id == input.arrivalId }
         let arrival = arrivalIndex.flatMap { located[$0].coordinate }
-        let train = input.train
+        var train = input.train
         let stopsKey = located.map { "\($0.id):\($0.status)" }.joined(separator: "|")
             + "↦\(input.departureId ?? "")→\(input.arrivalId ?? "")"
 
@@ -161,16 +163,27 @@ struct TrainMapGeometry {
             let here = train ?? located.first { $0.status == .current }?.coordinate
             let cut = here.map { Self.forwardIndex(in: path, to: $0, from: pathCut) } ?? 0
             pathCut = cut
-            travelled = Array(path[...cut])
-            remaining = Array(path[cut...])
+            if let current = train, let spot = Self.locate(current, on: path, near: cut) {
+                // Train calé sur le tracé, coupé à cet endroit précis. Le tracé suit une voie de
+                // référence de la ligne, pas forcément celle du train (à quai sur la voie 4, le
+                // tracé passe voie 1) : relier le tracé au GPS dessinerait une voie à côté.
+                train = spot.point
+                travelled = Array(path[...spot.start])
+                remaining = Array(path[(spot.start + 1)...])
+                heading = Self.bearing(from: path[spot.start], to: path[spot.start + 1])
+                linesKey = "path:\(path.count):\(spot.start)"
+            } else {
+                travelled = Array(path[...cut])
+                remaining = Array(path[cut...])
+                heading = train.flatMap { Self.heading(at: $0, ahead: remaining, behind: travelled) }
+                linesKey = "path:\(path.count):\(cut)"
+            }
             if let arrival {
                 // Gare d'arrivée cherchée devant le train, pour la même raison.
                 let end = Self.nearest(in: path, to: arrival, range: cut..<path.count).index
                 framePoints += path[cut...end]
                 framePoints.append(arrival)
             }
-            linesKey = "path:\(path.count):\(cut)"
-            heading = train.flatMap { Self.pathHeading(path, cut: cut, train: $0) }
         } else {
             // Sans tracé publié : gares reliées en ligne droite, et positions relevées pour la
             // portion parcourue depuis le lancement de l'app.
@@ -203,33 +216,36 @@ struct TrainMapGeometry {
                       linesKey: linesKey,
                       stopsKey: stopsKey,
                       frame: Self.frame(framePoints),
+                      train: train,
                       heading: heading)
     }
 
-    /// Cap du train sur un tracé publié : sens du tronçon sur lequel il se trouve, l'un des
-    /// deux qui encadrent le point atteint. Le tracé suit la voie, là où une position GPS
-    /// tremble, et reste juste à l'arrêt. Viser le point suivant ne suffit pas : sur une LGV,
-    /// les points sont espacés de plusieurs kilomètres et le plus proche est souvent derrière
-    /// le train.
-    static func pathHeading(_ path: [CLLocationCoordinate2D], cut: Int, train: CLLocationCoordinate2D) -> Double? {
+    /// Tronçon du tracé où se trouve le train, l'un des deux qui encadrent le point atteint,
+    /// et projection du train sur ce tronçon. Le sens du tronçon donne le cap : le tracé suit
+    /// la voie, là où une position GPS tremble, et reste juste à l'arrêt. Viser le point
+    /// suivant ne suffirait pas : sur une LGV, les points sont espacés de plusieurs kilomètres
+    /// et le plus proche est souvent derrière le train. `nil` à plus de 300 m du tracé.
+    static func locate(_ train: CLLocationCoordinate2D,
+                       on path: [CLLocationCoordinate2D],
+                       near cut: Int) -> (start: Int, point: CLLocationCoordinate2D)? {
         let here = MKMapPoint(train)
-        let segments = [cut - 1, cut].filter { $0 >= 0 && $0 + 1 < path.count }
-            .filter { MKMapPoint(path[$0]).distance(to: MKMapPoint(path[$0 + 1])) > 1 }
-        guard let start = segments.min(by: {
-            distance(here, toSegment: MKMapPoint(path[$0]), MKMapPoint(path[$0 + 1]))
-                < distance(here, toSegment: MKMapPoint(path[$1]), MKMapPoint(path[$1 + 1]))
-        }) else { return nil }
-        return bearing(from: path[start], to: path[start + 1])
+        var best: (start: Int, point: MKMapPoint, distance: Double)?
+        for start in [cut - 1, cut] where start >= 0 && start + 1 < path.count {
+            let a = MKMapPoint(path[start]), b = MKMapPoint(path[start + 1])
+            let dx = b.x - a.x, dy = b.y - a.y
+            let lengthSquared = dx * dx + dy * dy
+            guard lengthSquared > 0 else { continue }
+            let t = max(0, min(1, ((here.x - a.x) * dx + (here.y - a.y) * dy) / lengthSquared))
+            let point = MKMapPoint(x: a.x + t * dx, y: a.y + t * dy)
+            let distance = here.distance(to: point)
+            if best.map({ distance < $0.distance }) ?? true { best = (start, point, distance) }
+        }
+        guard let best, best.distance < 300 else { return nil }
+        return (best.start, best.point.coordinate)
     }
 
-    private static func distance(_ p: MKMapPoint, toSegment a: MKMapPoint, _ b: MKMapPoint) -> Double {
-        let dx = b.x - a.x, dy = b.y - a.y
-        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)))
-        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
-    }
-
-    /// Sans tracé publié : cap vers la première gare à plus de 50 m devant le train, ou depuis
-    /// le dernier point à plus de 50 m derrière en bout de trajet.
+    /// Sans tracé publié, ou loin de lui : cap vers le premier point à plus de 50 m devant le
+    /// train, ou depuis le dernier point à plus de 50 m derrière en bout de trajet.
     static func heading(at train: CLLocationCoordinate2D,
                         ahead: [CLLocationCoordinate2D],
                         behind: [CLLocationCoordinate2D]) -> Double? {
@@ -375,7 +391,7 @@ struct LocalTileMapView: NSViewRepresentable {
             var payload: [String: Any] = [
                 "mode": input.follow ? "follow" : "overview",
                 "tint": input.tintCSS,
-                "train": input.train.map { [$0.longitude, $0.latitude] as Any } ?? NSNull(),
+                "train": output.train.map { [$0.longitude, $0.latitude] as Any } ?? NSNull(),
                 "heading": output.heading ?? NSNull(),
             ]
             if output.linesKey != sentLinesKey {
@@ -538,14 +554,14 @@ struct AppleMapView: NSViewRepresentable {
                 map.addAnnotations(stopAnnotations)
             }
 
-            let head = [input.train].compactMap { $0 }
+            let head = [output.train].compactMap { $0 }
             // Dans cet ordre : le parcouru, ajouté en dernier, passe au-dessus du restant.
             remainingLine = replace(remainingLine, with: head + output.remaining, on: map)
             travelledLine = replace(travelledLine, with: output.travelled + head, on: map)
 
-            updateTrain(map, train: input.train, heading: output.heading)
+            updateTrain(map, train: output.train, heading: output.heading)
             if isFollowing {
-                center(map, on: input.train)
+                center(map, on: output.train)
             } else if let frame = output.frame {
                 follow(map, rect: frame)
             }
