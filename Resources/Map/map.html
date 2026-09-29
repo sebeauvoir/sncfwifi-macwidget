@@ -191,29 +191,15 @@ function line(coordinates) {
   return { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } };
 }
 
-// Couleur éclaircie mais opaque pour le reste du trajet : un trait semi-transparent laisse
-// voir la voie ferrée du fond de carte, d'où des nuances changeantes le long du tracé.
-function pale(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const base = DARK ? [72, 72, 74] : [255, 255, 255];
-  return "#" + [n >> 16, n >> 8, n].map((value, i) => {
-    const channel = value & 255;
-    return Math.round(channel + (base[i] - channel) * 0.5).toString(16).padStart(2, "0");
-  }).join("");
-}
-
+// Une seule couleur par type de voie, parcouru ou non : violet sur ligne classique, ambre sur
+// LGV. La flèche du train suffit à dire où il en est.
 function paintLines() {
-  const colors = {
-    travelled: tint, remaining: pale(tint),
-    "lgv-travelled": LGV_COLOR, "lgv-remaining": pale(LGV_COLOR),
-  };
   for (const id of ["travelled", "remaining"]) {
-    const lgv = `lgv-${id}`;
-    map.setPaintProperty(id, "line-color", colors[id]);
-    map.setPaintProperty(lgv, "line-color", colors[lgv]);
-    map.setPaintProperty(lgv, "line-width", 5);
+    map.setPaintProperty(id, "line-color", tint);
     map.setPaintProperty(id, "line-width", 4);
-    map.setPaintProperty(`${id}-head`, "line-color", ["case", ["get", "lgv"], colors[lgv], colors[id]]);
+    map.setPaintProperty(`lgv-${id}`, "line-color", LGV_COLOR);
+    map.setPaintProperty(`lgv-${id}`, "line-width", 5);
+    map.setPaintProperty(`${id}-head`, "line-color", ["case", ["get", "lgv"], LGV_COLOR, tint]);
     map.setPaintProperty(`${id}-head`, "line-width", ["case", ["get", "lgv"], 5, 4]);
   }
 }

@@ -453,11 +453,11 @@ private struct PreviewReadouts: View {
         .onReceive(clock) { now = $0 }
     }
 
-    /// « 47 » + « min », ou « 2 » + « h36 » : l'unité reste dans sa colonne.
+    /// « 47 » + « min », ou « 2h13 » d'un seul tenant, sans unité.
     private static func duration(_ seconds: TimeInterval) -> (value: String, unit: String) {
         let minutes = Int(seconds / 60)
         guard minutes >= 60 else { return ("\(max(1, minutes))", "min") }
-        return ("\(minutes / 60)", "h" + String(format: "%02d", minutes % 60))
+        return ("\(minutes / 60)h" + String(format: "%02d", minutes % 60), "")
     }
 }
 
