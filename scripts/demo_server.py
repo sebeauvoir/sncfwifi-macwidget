@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 import json
+import mimetypes
+import re
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 HOST = "127.0.0.1"
 PORT = 8787
+
+# Version web (`web/`), servie sous /web/ : même origine que les API simulées, comme quand le
+# favori la lance sur le portail du train. http://127.0.0.1:8787/web/?demo
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 STATE_LOCK = Lock()
 STATE = {
@@ -295,6 +302,7 @@ HTML = """<!doctype html>
     <h1>Train WiFi Demo Server</h1>
     <p>API SNCF: <code>http://127.0.0.1:8787/router/api/...</code></p>
     <p>API Eurostar (JSONP): <code>http://127.0.0.1:8787/api/jsonp/...</code></p>
+    <p>Version web : <a href="/web/?demo">http://127.0.0.1:8787/web/?demo</a></p>
     <p>Les deux plateformes sont servies en permanence : c'est le réglage
        <em>Debug &gt; Opérateur simulé</em> de l'app qui décide laquelle est interrogée.</p>
 
@@ -397,8 +405,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _jsonp(self, payload):
-        """Réponse au format de la plateforme Icomera : l'objet JSON enveloppé dans `( … );`."""
-        body = f"({json.dumps(payload, indent=4)});".encode("utf-8")
+        """Réponse au format de la plateforme Icomera : l'objet JSON enveloppé dans `( … );`,
+        précédé du nom passé en `callback` s'il y en a un (lecture par balise script)."""
+        callback = parse_qs(urlparse(self.path).query).get("callback", [""])[0]
+        if not re.fullmatch(r"[A-Za-z_$][\w$]*", callback):
+            callback = ""
+        body = f"{callback}({json.dumps(payload, indent=4)});".encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/javascript; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -413,11 +425,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _static(self, path):
+        relative = path[len("/web/"):] or "index.html"
+        target = (WEB_DIR / relative).resolve()
+        if WEB_DIR not in target.parents or not target.is_file():
+            self._json(404, {"error": "not_found"})
+            return
+        body = target.read_bytes()
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if target.suffix == ".webmanifest":
+            content_type = "application/manifest+json"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         path = urlparse(self.path).path
 
         if path == "/":
             self._html(HTML)
+            return
+        if path == "/web":
+            self.send_response(301)
+            self.send_header("Location", "/web/?demo")
+            self.end_headers()
+            return
+        if path.startswith("/web/"):
+            self._static(path)
             return
         if path == "/api/state":
             with STATE_LOCK:

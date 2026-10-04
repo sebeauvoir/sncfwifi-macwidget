@@ -18,6 +18,19 @@ la jauge de progression du trajet en dessous.
 - Un nouveau réseau doit implémenter `TrainDataSource`, y compris `fetchLive` (pas de valeur
   par défaut) : voir « Ajouter un réseau » dans le README.
 
+## Version web
+
+- `web/` : page statique (vanilla JS, sans build) publiée sur GitHub Pages par
+  `.github/workflows/pages.yml` à chaque push sur `main` qui la touche. Ces pushes ne publient
+  pas de release macOS (`paths-ignore` de `build.yml`).
+- Toute la logique est dans `web/app.js`, portage en JavaScript des `*DataSource.swift` : une
+  évolution de l'analyse d'une API se reporte des deux côtés.
+- Le portail du train n'envoie pas d'en-têtes CORS : à bord, la page passe par un favori lancé
+  sur le portail (même origine). Ne pas compter sur un `fetch` depuis GitHub Pages.
+- Test en session cloud : `python3 scripts/demo_server.py`, puis Playwright (préinstallé) sur
+  `http://127.0.0.1:8787/web/?demo` ; ICE et Lyria, absents du serveur démo, se testent en
+  interceptant leurs requêtes (`context.route`).
+
 ## Processus de livraison
 
 Le workflow `.github/workflows/build.yml` publie une release (tag `vX.Y.Z` incrémenté, avec
@@ -39,7 +52,7 @@ Pour chaque modification :
 4. Fusionner la pull request seulement quand l'utilisateur le demande, en méthode `rebase`
    (historique linéaire, changelog propre). GitHub supprime alors la branche tout seul
    (« Automatically delete head branches » est activé).
-5. Le push sur `main` publie la release suivante : vérifier que le run a réussi et donner le
+5. Le push sur `main` publie la release suivante (et la version web si `web/` a changé) : vérifier que le run a réussi et donner le
    lien de la release. Exception : un push qui ne touche que `*.md`, `img/` ou `.gitignore`
    ne déclenche aucun build (`paths-ignore`), ses commits rejoignent le changelog suivant.
 

@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-    # Un push qui ne touche que la documentation ne publie pas de release : ses commits
-    # figureront dans le changelog de la suivante. Sans effet sur les tags.
+    # Un push qui ne touche que la documentation ou la version web (publiée à part par
+    # pages.yml) ne publie pas de release : ses commits figureront dans le changelog de la
+    # suivante. Sans effet sur les tags.
     paths-ignore:
       - "**.md"
       - "img/**"
       - ".gitignore"
+      - "web/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
