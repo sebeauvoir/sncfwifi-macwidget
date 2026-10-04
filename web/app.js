@@ -19,6 +19,7 @@
     return;
   }
 
+  const VERSION = 'web-2026-10-04';
   const FULL_INTERVAL = 5000;
   const LIVE_INTERVAL = 1000;
   const REDETECT_INTERVAL = 10000;
@@ -100,13 +101,25 @@
     }
   };
 
+  /// Dernière réponse de chaque endpoint, pour « Copier le diagnostic » : à bord, c'est la seule
+  /// façon de savoir ce que le portail a vraiment répondu (refus CORS, délai, page d'accueil…).
+  const diag = new Map();
+  const record = (url, entry) => {
+    diag.set(url.split('?')[0], { ...entry, at: new Date().toLocaleTimeString('fr-FR') });
+  };
+
   const getJSON = async (url, timeout = TIMEOUT) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeout);
     try {
       const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store', credentials: 'omit' });
-      return parseBody(await res.text());
-    } catch {
+      const text = await res.text();
+      const body = parseBody(text);
+      record(url, { via: 'fetch', status: res.status, parsed: body !== null, size: text.length, sample: text.slice(0, 1500) });
+      return body;
+    } catch (error) {
+      // TypeError : refus CORS ou réseau injoignable (le navigateur ne dit pas lequel).
+      record(url, { via: 'fetch', error: error?.name === 'AbortError' ? `délai dépassé (${timeout} ms)` : `${error?.name}: ${error?.message}` });
       return null;
     } finally {
       clearTimeout(timer);
@@ -127,19 +140,32 @@
       script.remove();
       resolve(value ?? null);
     };
-    const timer = setTimeout(() => finish(null), timeout);
-    window[name] = (data) => finish(data);
-    script.onerror = () => finish(null);
+    const timer = setTimeout(() => {
+      record(url, { via: 'jsonp', error: 'délai dépassé' });
+      finish(null);
+    }, timeout);
+    window[name] = (data) => {
+      record(url, { via: 'jsonp', parsed: true, sample: JSON.stringify(data).slice(0, 1500) });
+      finish(data);
+    };
+    script.onerror = () => {
+      record(url, { via: 'jsonp', error: 'script refusé ou injoignable' });
+      finish(null);
+    };
     // Chargé sans appel du callback : le portail a ignoré le paramètre.
-    script.onload = () => setTimeout(() => finish(null), 0);
+    script.onload = () => setTimeout(() => {
+      if (!done) record(url, { via: 'jsonp', error: 'callback ignoré' });
+      finish(null);
+    }, 0);
     script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${name}&_=${Date.now()}`;
     document.head.appendChild(script);
   });
 
   /// Origine de l'API d'un réseau : la page elle-même quand elle est servie par le portail
   /// (favori) ou par le serveur démo, sinon l'hôte du train.
+  const onHost = (host) => location.hostname === host || location.hostname.endsWith(`.${host}`);
   const base = (host) => {
-    if (DEMO || location.hostname === host) return location.origin;
+    if (DEMO || onHost(host)) return location.origin;
     return `https://${host}`;
   };
 
@@ -815,7 +841,7 @@
     const remembered = store.get('provider');
     // Servie par un portail : son réseau d'abord, les autres seraient lus d'une autre origine.
     // En démo, `?demo=eurostar` choisit le réseau simulé (le serveur sert SNCF et Icomera).
-    const own = PROVIDERS.find((p) => p.host === location.hostname || (DEMO && p.id === params.get('demo')));
+    const own = PROVIDERS.find((p) => onHost(p.host) || (DEMO && p.id === params.get('demo')));
     const order = own ? [own] : [...PROVIDERS].sort((a, b) => (b.id === remembered) - (a.id === remembered));
     const results = await Promise.all(order.map((p) => p.probe().catch(() => false)));
     const found = order[results.indexOf(true)] ?? null;
@@ -987,7 +1013,7 @@
 .sw-bars i.on{background:var(--accent)}
 .sw-note{color:var(--muted);font-size:12px;margin-top:10px}
 .sw-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px}
-.sw-foot div{display:flex;gap:8px}
+.sw-foot div{display:flex;gap:8px;flex-wrap:wrap}
 .sw-empty{text-align:center;padding:28px 16px}
 .sw-empty h2{margin:0 0 8px;font-size:20px}
 .sw-empty p{color:var(--muted);margin:0 0 10px}
@@ -1111,7 +1137,7 @@
       : '';
     const ago = state.updatedAt ? `mis à jour à ${state.updatedAt.toLocaleTimeString('fr-FR')}` : '';
     return `<div class="sw-foot"><span>${esc(state.provider?.name ?? '')}${DEMO ? ' · démo' : ''} · ${ago}</span>
-      <div>${wake}<button class="sw-btn" data-refresh>Actualiser</button></div></div>`;
+      <div>${wake}<button class="sw-btn" data-diag>Diagnostic</button><button class="sw-btn" data-refresh>Actualiser</button></div></div>`;
   }
 
   function headHTML(trip) {
@@ -1134,7 +1160,7 @@
          ouvrez <a href="https://wifi.sncf/fr/" target="_blank" rel="noopener">wifi.sncf</a>, puis lancez le favori
          <b>SNCF Wifi</b> (voir « Installer le favori » plus bas).</p>`;
     return `<div class="sw-card sw-empty"><h2>Pas de train détecté</h2>${hint}
-      <p><button class="sw-btn" data-refresh>Réessayer</button></p></div>`;
+      <p><button class="sw-btn" data-refresh>Réessayer</button> <button class="sw-btn" data-diag>Copier le diagnostic</button></p></div>`;
   }
 
   function render() {
@@ -1167,6 +1193,7 @@
     if (target.matches('[data-close]')) { api.toggle(); return; }
     if (target.matches('[data-refresh]')) { detect(); return; }
     if (target.matches('[data-wake]')) { toggleWakeLock(); return; }
+    if (target.matches('[data-diag]')) { copyDiagnostic(target); return; }
     if (target.matches('[data-fold]')) { state.expanded = !state.expanded; render(); return; }
     if (target.dataset.departure) {
       store.set('departure', target.dataset.departure);
@@ -1185,6 +1212,33 @@
       render();
     }
   });
+
+  async function copyDiagnostic(button) {
+    const report = JSON.stringify({
+      version: VERSION,
+      page: location.href,
+      mode: overlay ? 'favori' : 'page',
+      navigator: navigator.userAgent,
+      reseau: state.provider?.id ?? null,
+      phase: state.phase,
+      echecs: state.failures,
+      reponses: Object.fromEntries(diag),
+    }, null, 2);
+    const label = button.textContent;
+    try {
+      await navigator.clipboard.writeText(report);
+      button.textContent = 'Copié ✓';
+      setTimeout(() => { button.textContent = label; }, 2000);
+    } catch {
+      // Presse-papiers refusé : le texte s'affiche, sélectionné, pour une copie à la main.
+      const area = document.createElement('textarea');
+      area.value = report;
+      area.readOnly = true;
+      area.style.cssText = 'width:100%;height:240px;font:12px monospace;margin-top:8px';
+      button.closest('.sw-foot, .sw-empty').appendChild(area);
+      area.select();
+    }
+  }
 
   const api = {
     toggle() {
