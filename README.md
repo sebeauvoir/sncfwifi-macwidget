@@ -60,6 +60,30 @@ système 5 / 10 / 15 min avant l'arrivée, notification de changement de voie.
 
 ---
 
+## Version web 🌐
+
+Pas de Mac à bord ? La même chose tourne dans le navigateur d'un téléphone ou d'une tablette :
+**[sebeauvoir.github.io/sncfwifi-macwidget](https://sebeauvoir.github.io/sncfwifi-macwidget/)**.
+
+Vitesse relue chaque seconde, temps et kilomètres restants, jauge de **mon** trajet, prochain
+arrêt, desserte (retards, voies, durées d'arrêt ; touchez une gare pour en faire votre gare de
+départ ou d'arrivée, mémorisées) et le détail du réseau (WiFi, données, rame…). Mêmes réseaux et
+même logique que le widget ; pas encore de carte ni de notifications. Un bouton garde l'écran
+allumé.
+
+Le portail du train n'envoie pas d'en-têtes CORS : une page hébergée ailleurs ne peut pas lire
+son API. D'où un **favori** (bookmarklet), à installer depuis la page (« Installer le favori ») :
+lancé sur la page du portail (`wifi.sncf`…), il y affiche le widget en surimpression, qui lit alors
+l'API depuis la même origine. Le relancer masque ou réaffiche le widget. Si le portail refuse les
+scripts venus d'ailleurs, le **favori autonome** embarque tout le code dans l'adresse.
+
+Le code tient dans `web/app.js`, sans dépendance ni étape de build. Le workflow `pages.yml` le
+publie sur GitHub Pages à chaque push sur `main` qui touche `web/` (Settings → Pages → Source
+« GitHub Actions », une seule fois). En local, le serveur démo sert la page :
+`http://127.0.0.1:8787/web/?demo` (`?demo=eurostar` pour le réseau Icomera).
+
+---
+
 ## Réseaux WiFi pris en charge 🚆
 
 | Réseau | Trains | API | Desserte · retard · ETA | Voie | Vitesse | Position | Opérateurs | Données | Connectivité | Carte du bar |
@@ -378,6 +402,9 @@ lequel l'app interroge.
    - dans l'app : **Debug → Ouvrir le panneau démo**
    - ou directement : `http://127.0.0.1:8787`
 3. Activer **Debug → Mode Démo** dans l'app.
+
+La version web se teste de la même façon : `http://127.0.0.1:8787/web/?demo`, ou
+`?demo=eurostar` pour le réseau Icomera.
 
 Le panneau HTML fait varier vitesse, retard et cause, index d'arrêt, arrêt en gare, qualité WiFi
 et données côté SNCF, ainsi que le système, les modems, les opérateurs et le quota côté Eurostar.
